@@ -1,0 +1,18 @@
+{
+  "name": "social-presence-autopilot",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/web",
+    "apps/worker"
+  ],
+  "scripts": {
+    "backend": "backend/backend serve --http=127.0.0.1:8090",
+    "dev": "npm run dev -w apps/web",
+    "worker": "npm run dev -w apps/worker",
+    "build": "npm run build -w apps/web",
+    "check": "npm run check -w apps/worker && npm run check -w apps/web",
+    "test": "npm run test -w apps/worker && npm run test -w apps/web"
+  }
+}

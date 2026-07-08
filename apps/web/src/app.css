@@ -1,0 +1,98 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@plugin '@tailwindcss/forms';
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Neobrutalism theme: thick black borders, hard offset shadows (no blur),
+ * bold flat colors, chunky rounded corners. Light mode only — not requested.
+ */
+:root {
+	--radius: 0.7rem;
+
+	--background: #f3f1e7;
+	--foreground: #14140f;
+
+	--card: #ffffff;
+	--card-foreground: #14140f;
+
+	--popover: #ffffff;
+	--popover-foreground: #14140f;
+
+	--primary: #39ff88;
+	--primary-foreground: #0c1f13;
+
+	--secondary: #ffd23f;
+	--secondary-foreground: #14140f;
+
+	--muted: #e8e4d6;
+	--muted-foreground: #55534a;
+
+	--accent: #7dd3fc;
+	--accent-foreground: #0c1f13;
+
+	--destructive: #ff5470;
+	--destructive-foreground: #ffffff;
+
+	--info: #60a5fa;
+	--warning: #ffb84c;
+	--success: #39ff88;
+	--violet: #b794ff;
+
+	--border: #14140f;
+	--input: #ffffff;
+	--ring: #14140f;
+}
+
+@theme inline {
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
+	--color-info: var(--info);
+	--color-warning: var(--warning);
+	--color-success: var(--success);
+	--color-violet: var(--violet);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+}
+
+/* Signature hard-edge shadow utilities — offset only, no blur, no spread.
+   Variants (hover:, active:, ...) apply to these automatically. */
+@utility shadow-brutal-sm {
+	box-shadow: 2px 2px 0 0 var(--border);
+}
+@utility shadow-brutal {
+	box-shadow: 4px 4px 0 0 var(--border);
+}
+@utility shadow-brutal-lg {
+	box-shadow: 8px 8px 0 0 var(--border);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground;
+	}
+}

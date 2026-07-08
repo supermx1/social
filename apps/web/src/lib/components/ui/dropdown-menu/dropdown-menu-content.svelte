@@ -1,0 +1,26 @@
+<script lang="ts">
+	import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
+	import { cn } from '$lib/utils';
+
+	let {
+		ref = $bindable(null),
+		class: className,
+		sideOffset = 6,
+		children,
+		...restProps
+	}: DropdownMenuPrimitive.ContentProps = $props();
+</script>
+
+<DropdownMenuPrimitive.Portal>
+	<DropdownMenuPrimitive.Content
+		bind:ref
+		{sideOffset}
+		class={cn(
+			'z-50 min-w-[10rem] overflow-hidden rounded-md border-2 border-border bg-popover p-1 text-popover-foreground shadow-brutal',
+			className
+		)}
+		{...restProps}
+	>
+		{@render children?.()}
+	</DropdownMenuPrimitive.Content>
+</DropdownMenuPrimitive.Portal>

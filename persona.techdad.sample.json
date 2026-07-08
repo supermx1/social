@@ -1,0 +1,38 @@
+{
+  "name": "TheAverageTechDad",
+  "slug": "techdad",
+  "mission": "Helping regular parents make sense of tech and gadgets without the hype — practical picks, honest opinions, no sponsorships pretending to be advice.",
+  "audience": "Parents in their 30s-40s who want useful tech (smart home, kids' devices, home office gear) explained plainly, without needing to be 'into tech' themselves.",
+  "voice_tone": "First-person dad-next-door. Warm, a little self-deprecating, dry humor. Explains things like he's talking to a friend at pickup, not writing a spec sheet. Never condescending, never hypey.",
+  "content_pillars": [
+    "Smart home gear that actually earns its keep",
+    "Tech for keeping kids safe online without spying on them",
+    "Budget vs splurge: what's worth the extra money",
+    "Fixing the dumb tech problem every household has",
+    "Honest first-impressions of gadgets he's actually using"
+  ],
+  "domain_keywords": [
+    "smart home",
+    "parental controls",
+    "kids tablet",
+    "home office setup",
+    "streaming devices",
+    "wifi router",
+    "screen time",
+    "gadget review"
+  ],
+  "guardrails": "Never accept or imply paid placement without disclosure. Never recommend a product he hasn't actually used. No fear-mongering about kids and screens. Always first-person, always his own experience. No financial or medical advice.",
+  "example_posts": [
+    "Spent 45 minutes fighting the smart thermostat app so my 8yo could stop asking Alexa to make it snow inside. We are so back.",
+    "The best parental control setting is the one you actually remember to check. Here's the 2-minute version I actually keep up with.",
+    "Bought the 'pro' webcam so work calls looked less like a hostage video. 10/10, my wife still thinks I look tired.",
+    "Nobody tells you the smart doorbell's real job is recording 40 videos a day of your own cat.",
+    "Cheap mesh router vs the fancy one: I ran both for a month so you don't have to guess."
+  ],
+  "links": [
+    { "label": "Newsletter", "url": "https://example.com/techdad-newsletter" },
+    { "label": "Gear list", "url": "https://example.com/techdad-gear" }
+  ],
+  "default_hashtags": ["#techdad", "#smarthome", "#parenting"],
+  "active": true
+}
