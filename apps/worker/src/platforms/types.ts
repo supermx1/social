@@ -47,8 +47,18 @@ export type EgoPlatformModule = {
 	compose(account: AccountRecord, post: PostRecord): Promise<ComposeResult>;
 };
 
-/** True when `handle` (no leading '@') has a live session per a SessionStatusResult. */
+/**
+ * Accounts are meant to store the bare handle, but the UI accepts a pasted '@kasa_africa' and
+ * that is what is actually in the database. Normalising in one place keeps both forms working —
+ * without it every comparison builds '@@kasa_africa' and nothing ever matches, which presents as
+ * a dead session rather than as a bug.
+ */
+export function normalizeHandle(handle: string): string {
+	return handle.trim().replace(/^@+/, '');
+}
+
+/** True when `handle` (with or without a leading '@') has a live session. */
 export function sessionHasHandle(session: SessionStatusResult, handle: string): boolean {
-	const wanted = `@${handle}`;
+	const wanted = `@${normalizeHandle(handle)}`;
 	return session.activeHandle === wanted || session.otherHandles.includes(wanted);
 }

@@ -32,7 +32,10 @@ function execEgoBrowser(script: string, timeoutMs: number): Promise<string> {
 					reject(new Error(`ego-browser script failed: ${(stderr || error.message).trim()}`));
 					return;
 				}
-				resolve(stdout);
+				// cliLog() writes to STDERR, not stdout (verified 2026-08-08 — reading stdout alone
+				// returns nothing and every call looks like an empty result). Both streams are
+				// merged because the CLI may also emit diagnostics; callers pick the line they want.
+				resolve(`${stdout}\n${stderr}`);
 			},
 		);
 		// If the child dies before we finish writing (bad CLI, timeout kill), stdin emits EPIPE.

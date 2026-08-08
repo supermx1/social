@@ -1,6 +1,7 @@
 import { runEgo } from '../lib/ego';
+import { resolve } from 'node:path';
 import type { AccountRecord, PostRecord } from '../types';
-import type { EgoPlatformModule, SessionStatusResult } from './types';
+import { normalizeHandle, type EgoPlatformModule, type SessionStatusResult } from './types';
 
 /**
  * X publishing over ego-browser, driven entirely by the recon in docs/x-posting-recon.md.
@@ -17,20 +18,24 @@ const HOME_URL = 'https://x.com/home';
 const OPEN_TIMEOUT_S = 20;
 const SWITCH_POLL_ATTEMPTS = 9; // ~1s each; recon observed switches take >1s, <10s
 const TOAST_POLL_ATTEMPTS = 10;
+const MEDIA_POLL_ATTEMPTS = 30; // ~1s each; a large image can take a while to process
 const SWITCH_TARGET_ATTR = 'data-ego-switch-target';
+const MAX_MEDIA = 4; // X's own per-post limit
+const CLICK_SETTLE_S = 3;
+const CLICK_ATTEMPTS = 3;
 
 // X handles are [A-Za-z0-9_]+ only. Enforced before any handle is interpolated into a
 // script string, so a corrupted PocketBase record can't inject browser-side JS.
 const HANDLE_RE = /^[A-Za-z0-9_]+$/;
 
 function assertValidHandle(handle: string) {
-	if (!HANDLE_RE.test(handle)) {
+	if (!HANDLE_RE.test(normalizeHandle(handle))) {
 		throw new Error(`Refusing to script an X account with an unexpected handle: ${JSON.stringify(handle)}`);
 	}
 }
 
 function handleMatches(activeHandle: string | null, handle: string) {
-	return activeHandle === `@${handle}`;
+	return activeHandle === `@${normalizeHandle(handle)}`;
 }
 
 /**
@@ -95,6 +100,16 @@ const READ_EDITOR_TEXT_SNIPPET = `(() => {
 	return el ? el.innerText : null;
 })()`;
 
+const INLINE_POST_BUTTON = '[data-testid="tweetButtonInline"]';
+const MODAL_POST_BUTTON = '[data-testid="tweetButton"]';
+const HAS_INLINE_POST_BUTTON_SNIPPET = `Boolean(document.querySelector('[data-testid="tweetButtonInline"]'))`;
+
+const COMPOSER_IS_EMPTY_SNIPPET = `(() => {
+	const el = document.querySelector('[data-testid="tweetTextarea_0"]');
+	const box = document.querySelector('[data-testid="attachments"]');
+	return (!el || el.innerText.trim() === '') && !box;
+})()`;
+
 const READ_TOAST_SNIPPET = `(() => {
 	const toast = document.querySelector('[data-testid="toast"]');
 	if (!toast) return null;
@@ -132,6 +147,18 @@ function tagSwitchTargetSnippet(handle: string) {
 function preamble() {
 	return `await useOrCreateTaskSpace(${JSON.stringify(X_TASK_SPACE)});
 	await openOrReuseTab(${JSON.stringify(HOME_URL)}, { wait: true, timeout: ${OPEN_TIMEOUT_S} });`;
+}
+
+/**
+ * Task space only — deliberately NO openOrReuseTab.
+ *
+ * Verified 2026-08-08: a click issued from a script that begins with openOrReuseTab does not
+ * register — the post is never submitted, and it surfaces only as a missing toast. The identical
+ * click from a script without it works every time. Re-opening the tab appears to leave the page
+ * briefly non-interactive. Scripts that act on an already-staged composer must use this.
+ */
+function attachedPreamble() {
+	return `await useOrCreateTaskSpace(${JSON.stringify(X_TASK_SPACE)});`;
 }
 
 /** Opens the switcher (if anyone's logged in) and reads full session status. */
@@ -183,7 +210,13 @@ function switchAccountScript(handle: string) {
 /** Types the post body with real keystrokes, then reads it back plus the active handle. */
 function typeComposerScript(body: string) {
 	return `(async () => {
-	${preamble()}
+	await useOrCreateTaskSpace(${JSON.stringify(X_TASK_SPACE)});
+	// gotoAndWait, not openOrReuseTab: a real navigation is what clears the composer. A failed
+	// run leaves its text and media staged, and typeText INSERTS at the cursor rather than
+	// replacing — without this, run N+1 publishes a mangled splice of two different drafts
+	// (observed 2026-08-08).
+	await gotoAndWait(${JSON.stringify(HOME_URL)}, { timeout: ${OPEN_TIMEOUT_S} });
+	await wait(2);
 	await click('[data-testid="tweetTextarea_0"]', { label: 'focus x composer' });
 	await typeText(${JSON.stringify(body)});
 	const editorText = await js(${JSON.stringify(READ_EDITOR_TEXT_SNIPPET)});
@@ -192,26 +225,99 @@ function typeComposerScript(body: string) {
 })();`;
 }
 
+/**
+ * Attachment state. Verified live 2026-08-08: after `uploadFile` into the hidden
+ * `input[data-testid="fileInput"]`, X renders `[data-testid="attachments"]` containing one
+ * `img` per file with a `blob:` src, and shows `[data-testid="progressBar-bar"]` while the
+ * upload is still in flight. Both conditions are needed — the img appears before the upload
+ * finishes, so counting images alone would let us click Post mid-upload.
+ */
+const READ_ATTACHMENTS_SNIPPET = `(() => {
+	const box = document.querySelector('[data-testid="attachments"]');
+	if (!box) return { ready: 0, uploading: false };
+	return {
+		ready: box.querySelectorAll('img[src^="blob:"]').length,
+		uploading: Boolean(box.querySelector('[data-testid="progressBar-bar"]')),
+	};
+})()`;
+
+/** Uploads each media path into the composer and waits for X to finish processing them. */
+function attachMediaScript(paths: readonly string[]) {
+	const uploads = paths
+		.map((p) => `await uploadFile('input[data-testid="fileInput"]', ${JSON.stringify(p)});\n\tawait wait(1);`)
+		.join('\n\t');
+	return `(async () => {
+	${preamble()}
+	${uploads}
+	let state = { ready: 0, uploading: true };
+	for (let i = 0; i < ${MEDIA_POLL_ATTEMPTS}; i++) {
+		state = await js(${JSON.stringify(READ_ATTACHMENTS_SNIPPET)});
+		if (state.ready >= ${paths.length} && !state.uploading) break;
+		await wait(1);
+	}
+	cliLog(JSON.stringify(state));
+})();`;
+}
+
 /** Clicks Post, then polls the toast until the permalink shows up. */
 function clickPostAndConfirmScript() {
 	return `(async () => {
-	${preamble()}
-	await click(${JSON.stringify('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]')}, { label: 'publish x post' });
+	${attachedPreamble()}
+	// The composer needs a moment to settle before it will accept the click. Clicking ~1s after
+	// the media-upload script exits reliably does nothing (verified 2026-08-08) — the identical
+	// click succeeds once the page has had time. Hence the settle, and the retry below.
+	await wait(${CLICK_SETTLE_S});
 	let toast = null;
-	for (let i = 0; i < ${TOAST_POLL_ATTEMPTS}; i++) {
-		await wait(1);
-		toast = await js(${JSON.stringify(READ_TOAST_SNIPPET)});
+	let composerEmpty = false;
+	for (let attempt = 0; attempt < ${CLICK_ATTEMPTS}; attempt++) {
+		const inline = await js(${JSON.stringify(HAS_INLINE_POST_BUTTON_SNIPPET)});
+		await click(inline ? ${JSON.stringify(INLINE_POST_BUTTON)} : ${JSON.stringify(MODAL_POST_BUTTON)}, { label: 'publish x post' });
+		for (let i = 0; i < ${TOAST_POLL_ATTEMPTS}; i++) {
+			await wait(1);
+			toast = await js(${JSON.stringify(READ_TOAST_SNIPPET)});
+			if (toast && toast.href) break;
+		}
 		if (toast && toast.href) break;
+		// No toast. Only retry if the composer still holds the draft — an empty composer means
+		// the post probably DID go out and we merely missed the toast, and clicking again there
+		// would publish it twice.
+		composerEmpty = await js(${JSON.stringify(COMPOSER_IS_EMPTY_SNIPPET)});
+		if (composerEmpty) break;
+		await wait(${CLICK_SETTLE_S});
 	}
-	cliLog(JSON.stringify(toast || {}));
+	cliLog(JSON.stringify({ toast: toast || null, composerEmpty }));
 })();`;
 }
 
 // --- runEgo callers ----------------------------------------------------------------------
 
 async function parseFirstLine<T>(script: string, fallback: T): Promise<T> {
-	const [line] = await runEgo(script);
-	return line ? (JSON.parse(line) as T) : fallback;
+	// The first JSON line, not simply the first line: runEgo merges stdout and stderr (cliLog
+	// writes to stderr), so unrelated CLI diagnostics can precede our payload.
+	for (const line of await runEgo(script)) {
+		if (!line.startsWith('{') && !line.startsWith('[')) continue;
+		try {
+			return JSON.parse(line) as T;
+		} catch {
+			// not our payload — keep looking
+		}
+	}
+	return fallback;
+}
+
+/**
+ * Just the active handle, from the sidebar button. Used for guard #2, immediately before the
+ * click: readSession() would open the switcher popup and Escape it, and a popup that failed to
+ * close sits directly over the Post button. Nothing here navigates or opens anything.
+ */
+async function readActiveHandle(): Promise<string | null> {
+	const script = `(async () => {
+	${attachedPreamble()}
+	const s = await js(${JSON.stringify(READ_SESSION_SNIPPET)});
+	cliLog(JSON.stringify({ activeHandle: s.activeHandle }));
+})();`;
+	const { activeHandle } = await parseFirstLine<{ activeHandle: string | null }>(script, { activeHandle: null });
+	return activeHandle;
 }
 
 async function readSession(): Promise<SessionStatusResult> {
@@ -230,9 +336,14 @@ async function typeComposer(body: string): Promise<{ activeHandle: string | null
 	return parseFirstLine(typeComposerScript(body), { activeHandle: null, editorText: null });
 }
 
-async function clickPostAndConfirm(): Promise<{ text?: string; href?: string | null } | null> {
-	const result = await parseFirstLine<{ text?: string; href?: string | null }>(clickPostAndConfirmScript(), {});
-	return result && Object.keys(result).length ? result : null;
+async function attachMedia(paths: readonly string[]): Promise<{ ready: number; uploading: boolean }> {
+	return parseFirstLine(attachMediaScript(paths), { ready: 0, uploading: true });
+}
+
+type ClickOutcome = { toast: { text?: string; href?: string | null } | null; composerEmpty: boolean };
+
+async function clickPostAndConfirm(): Promise<ClickOutcome> {
+	return parseFirstLine<ClickOutcome>(clickPostAndConfirmScript(), { toast: null, composerEmpty: false });
 }
 
 function extractHandleFromPermalink(href: string): string | null {
@@ -244,16 +355,15 @@ function extractHandleFromPermalink(href: string): string | null {
 /** Guard #1 (design §2.3): read before composing, unconditionally. Switches if needed. */
 async function ensureActiveAccount(account: AccountRecord): Promise<void> {
 	assertValidHandle(account.handle);
+	const handle = normalizeHandle(account.handle);
 	let session = await readSession();
-	if (handleMatches(session.activeHandle, account.handle)) return;
-	if (!session.otherHandles.includes(`@${account.handle}`)) {
-		throw new Error(
-			`X account @${account.handle} has no live session (active: ${session.activeHandle ?? 'none'}).`,
-		);
+	if (handleMatches(session.activeHandle, handle)) return;
+	if (!session.otherHandles.includes(`@${handle}`)) {
+		throw new Error(`X account @${handle} has no live session (active: ${session.activeHandle ?? 'none'}).`);
 	}
-	session = await switchAccount(account.handle);
-	if (!handleMatches(session.activeHandle, account.handle)) {
-		throw new Error(`Failed to switch X to @${account.handle}; still on ${session.activeHandle ?? 'none'}.`);
+	session = await switchAccount(handle);
+	if (!handleMatches(session.activeHandle, handle)) {
+		throw new Error(`Failed to switch X to @${handle}; still on ${session.activeHandle ?? 'none'}.`);
 	}
 }
 
@@ -261,8 +371,6 @@ async function compose(account: AccountRecord, post: PostRecord) {
 	// Guard #1 — nothing below runs, no compose script and no click, unless this passes.
 	await ensureActiveAccount(account);
 
-	// Type first, then guard #2 — checked again, immediately before clickPostAndConfirm()
-	// (the irreversible click) is ever called.
 	const typed = await typeComposer(post.body);
 	if (!sameText(typed.editorText, post.body)) {
 		throw new Error(
@@ -271,15 +379,38 @@ async function compose(account: AccountRecord, post: PostRecord) {
 			)}).`,
 		);
 	}
-	if (!handleMatches(typed.activeHandle, account.handle)) {
+
+	const media = (post.media ?? []).filter(Boolean).map((p) => resolve(p));
+	if (media.length > MAX_MEDIA) {
+		throw new Error(`X accepts at most ${MAX_MEDIA} images per post; this post has ${media.length}.`);
+	}
+	if (media.length) {
+		const state = await attachMedia(media);
+		if (state.ready < media.length || state.uploading) {
+			throw new Error(
+				`X did not finish attaching media (${state.ready}/${media.length} ready, uploading=${state.uploading}). Not posting a draft that is missing its image.`,
+			);
+		}
+	}
+
+	// Guard #2 — a FRESH read, not the handle from typeComposer above. Media upload can take
+	// tens of seconds, and the whole point of this check is that it happens immediately before
+	// the irreversible click with nothing slow in between.
+	const beforeClick = await readActiveHandle();
+	if (!handleMatches(beforeClick, account.handle)) {
 		throw new Error(
-			`Wrong X account immediately before posting: expected @${account.handle}, got ${typed.activeHandle ?? 'none'}.`,
+			`Wrong X account immediately before posting: expected @${normalizeHandle(account.handle)}, got ${beforeClick ?? 'none'}.`,
 		);
 	}
 
-	const toast = await clickPostAndConfirm();
+	const outcome = await clickPostAndConfirm();
+	const toast = outcome.toast;
 	if (!toast || !toast.href) {
-		throw new Error('X did not confirm the post was submitted (no toast).');
+		throw new Error(
+			outcome.composerEmpty
+				? 'X showed no confirmation toast, but the composer emptied — the post MAY have gone out. Check the account before retrying, or this will publish twice.'
+				: 'X did not confirm the post was submitted (no toast), and the draft is still in the composer.',
+		);
 	}
 
 	// Guard #3 (design §2.3/§2.5): the toast's own permalink names the account that
@@ -287,7 +418,7 @@ async function compose(account: AccountRecord, post: PostRecord) {
 	const postedHandle = extractHandleFromPermalink(toast.href);
 	if (!handleMatches(postedHandle, account.handle)) {
 		throw new Error(
-			`X posted under the wrong account: expected @${account.handle}, permalink says ${postedHandle ?? 'unknown'} (${toast.href}). Investigate immediately.`,
+			`X posted under the wrong account: expected @${normalizeHandle(account.handle)}, permalink says ${postedHandle ?? 'unknown'} (${toast.href}). Investigate immediately.`,
 		);
 	}
 	return { confirmed: true as const, postUrl: toast.href };
