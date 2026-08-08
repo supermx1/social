@@ -186,7 +186,12 @@
 						<TableRow>
 							<TableCell>
 								<div class="font-semibold">{account.personaName}</div>
-								<div class="text-xs font-medium text-muted-foreground">{account.platform} · {account.handle}</div>
+								<div class="text-xs font-medium text-muted-foreground">
+									{account.platform} · {account.handle}
+									{#if account.platform === 'linkedin'}
+										· {account.companyId ? `company ${account.companyId}` : 'personal profile'}
+									{/if}
+								</div>
 							</TableCell>
 							<TableCell><Badge variant={statusVariant(account.sessionStatus)}>{account.sessionStatus}</Badge></TableCell>
 							<TableCell>

@@ -105,14 +105,33 @@ describe('LinkedIn identity guard', () => {
 		expect(runEgo).toHaveBeenCalledTimes(2); // no click
 	});
 
-	it('publishes and reports confirmation when every guard passes', async () => {
+	// LinkedIn exposes no permalink at compose time, but every listed post carries a data-urn.
+	// Reading the post back is both the real confirmation and where posts.post_url comes from.
+	it('publishes, reads the post back, and returns its permalink', async () => {
 		runEgo
 			.mockResolvedValueOnce(line(composer({ editorText: '' }))) // open
 			.mockResolvedValueOnce(line(composer())) // typed
-			.mockResolvedValueOnce(line({ composerClosed: true, state: composer({ open: false }) }));
+			.mockResolvedValueOnce(line({ composerClosed: true, state: composer({ open: false }) })) // clicked
+			.mockResolvedValueOnce(line({ urn: 'urn:li:activity:7491981299054882816', index: 0, total: 4 }));
 
-		await expect(linkedinPlatform.compose(KASA, post)).resolves.toEqual({ confirmed: true });
-		expect(runEgo).toHaveBeenCalledTimes(3);
+		await expect(linkedinPlatform.compose(KASA, post)).resolves.toEqual({
+			confirmed: true,
+			postUrl: 'https://www.linkedin.com/feed/update/urn:li:activity:7491981299054882816/',
+		});
+		expect(runEgo).toHaveBeenCalledTimes(4);
+		expect(runEgo.mock.calls[3][0]).toContain('/company/107591805/admin/page-posts/published/');
+	});
+
+	// A closed composer is not proof — it closes on cancel too. If the post isn't in the list,
+	// say so loudly rather than reporting a success that would also mark the record as posted.
+	it('fails when the composer closed but the post is nowhere in the list', async () => {
+		runEgo
+			.mockResolvedValueOnce(line(composer({ editorText: '' })))
+			.mockResolvedValueOnce(line(composer()))
+			.mockResolvedValueOnce(line({ composerClosed: true, state: composer({ open: false }) }))
+			.mockResolvedValueOnce(line({ urn: null, index: -1, total: 6 }));
+
+		await expect(linkedinPlatform.compose(KASA, post)).rejects.toThrow(/not in .*page-posts/);
 	});
 
 	// LinkedIn exposes no permalink at compose time, so the composer closing IS the confirmation.
@@ -126,16 +145,24 @@ describe('LinkedIn identity guard', () => {
 		await expect(linkedinPlatform.compose(KASA, post)).rejects.toThrow(/did not confirm the post/);
 	});
 
+	// LinkedIn renders a person's full name ("Chukwuemeka Anyakora") while the natural thing to
+	// store is the profile slug ("chukwuemeka-anyakora"), so the name check treats hyphens and
+	// spaces alike. It reads the post back from the profile's activity feed, not a company list.
 	it('posts as the personal profile when no company id is set', async () => {
-		const mine = composer({ author: 'chukwuemeka-anyakora', url: 'https://www.linkedin.com/preload/sharebox/' });
+		const mine = composer({ author: 'Chukwuemeka Anyakora', url: 'https://www.linkedin.com/preload/sharebox/' });
 		runEgo
+			.mockResolvedValueOnce(line({ loggedIn: true, personal: 'chukwuemeka-anyakora', pages: [] })) // slug lookup
 			.mockResolvedValueOnce(line({ ...mine, editorText: '' }))
 			.mockResolvedValueOnce(line(mine))
-			.mockResolvedValueOnce(line({ composerClosed: true, state: { ...mine, open: false } }));
+			.mockResolvedValueOnce(line({ composerClosed: true, state: { ...mine, open: false } }))
+			.mockResolvedValueOnce(line({ urn: 'urn:li:activity:999', index: 0, total: 3 }));
 
-		await expect(linkedinPlatform.compose(PERSONAL, post)).resolves.toEqual({ confirmed: true });
-		// No company id, so the URL check is skipped and only the rendered name is enforced.
-		expect(runEgo.mock.calls[0][0]).toContain('preload/sharebox');
+		await expect(linkedinPlatform.compose(PERSONAL, post)).resolves.toEqual({
+			confirmed: true,
+			postUrl: 'https://www.linkedin.com/feed/update/urn:li:activity:999/',
+		});
+		expect(runEgo.mock.calls[1][0]).toContain('preload/sharebox');
+		expect(runEgo.mock.calls[4][0]).toContain('/in/chukwuemeka-anyakora/recent-activity/all/');
 	});
 });
 
@@ -157,9 +184,13 @@ describe('LinkedIn media (recon trap #3: two-step flow)', () => {
 			.mockResolvedValueOnce(
 				line({ selectedNames: ['pic.png'], nextClicked: true, composer: composer({ media: 1 }) }),
 			)
-			.mockResolvedValueOnce(line({ composerClosed: true, state: composer({ open: false }) }));
+			.mockResolvedValueOnce(line({ composerClosed: true, state: composer({ open: false }) }))
+			.mockResolvedValueOnce(line({ urn: 'urn:li:activity:42', index: 0, total: 2 }));
 
-		await expect(linkedinPlatform.compose(KASA, withImage)).resolves.toEqual({ confirmed: true });
+		await expect(linkedinPlatform.compose(KASA, withImage)).resolves.toEqual({
+			confirmed: true,
+			postUrl: 'https://www.linkedin.com/feed/update/urn:li:activity:42/',
+		});
 		expect(runEgo.mock.calls[2][0]).toContain('Add media');
 		expect(runEgo.mock.calls[2][0]).toContain('uploadFile');
 	});

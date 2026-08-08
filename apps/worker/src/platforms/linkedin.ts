@@ -41,10 +41,40 @@ export function composerUrl(companyId: string) {
 		: PERSONAL_SHARE_URL;
 }
 
-/** Display names are compared loosely — LinkedIn renders them as typed, we store them by hand. */
+/**
+ * Display names are compared loosely. LinkedIn renders a company page as its display name
+ * ("Kasa") but a person as their full name ("Chukwuemeka Anyakora"), while the natural thing to
+ * store for a personal account is the profile slug ("chukwuemeka-anyakora") — so hyphens,
+ * underscores and runs of whitespace are all treated as the same separator.
+ */
 function nameMatches(rendered: string | null, expected: string) {
 	if (!rendered) return false;
-	return normalizeHandle(rendered).toLowerCase() === normalizeHandle(expected).toLowerCase();
+	const flatten = (v: string) =>
+		normalizeHandle(v)
+			.toLowerCase()
+			.replace(/[-_\s]+/g, ' ')
+			.trim();
+	return flatten(rendered) === flatten(expected);
+}
+
+/**
+ * Where a published post can be read back. LinkedIn exposes no permalink in the composer, but
+ * both of these list posts as `.feed-shared-update-v2[data-urn]` (verified for the company admin
+ * list and the personal activity feed), which yields both the confirmation and the URL.
+ */
+function verificationUrl(companyId: string, personalSlug: string | null) {
+	if (companyId) return `https://www.linkedin.com/company/${companyId}/admin/page-posts/published/`;
+	return personalSlug ? `https://www.linkedin.com/in/${personalSlug}/recent-activity/all/` : null;
+}
+
+/** The chunk of the body used to recognise our post in the list — first real line, truncated. */
+export function confirmationSnippet(body: string) {
+	const line =
+		body
+			.split(/\r?\n/)
+			.map((part) => part.trim())
+			.find((part) => part && !part.startsWith('#')) ?? body.trim();
+	return line.slice(0, 60);
 }
 
 // --- Browser-side snippets, run via js() -----------------------------------------------
@@ -187,15 +217,7 @@ function attachMediaScript(paths: readonly string[]) {
 })();`;
 }
 
-/**
- * Clicks Post and waits for the composer to close.
- *
- * UNVERIFIED against a real publish. The previous Playwright implementation noted "LinkedIn gives
- * no reliable post URL after composing", and recon stopped short of publishing, so the composer
- * closing is treated as the confirmation and no permalink is claimed. If a permalink turns out to
- * be reachable, capture it here rather than inventing one — an unverified URL in posts.post_url is
- * worse than an empty one.
- */
+/** Clicks Post and waits for the composer to close. That alone is only a weak signal — see below. */
 function clickPostScript() {
 	return `(async () => {
 	${taskSpace()}
@@ -208,6 +230,39 @@ function clickPostScript() {
 		if (!state.open) break;
 	}
 	cliLog(JSON.stringify({ composerClosed: !state.open, state: state }));
+})();`;
+}
+
+/**
+ * Reads the post back from the identity's own post list to confirm it really published and to
+ * recover its permalink.
+ *
+ * A closed composer is not proof of publication — it closes on cancel too — so this is the actual
+ * confirmation. LinkedIn does not expose a URL at compose time, but every listed post carries
+ * `data-urn="urn:li:activity:<id>"`, which maps to /feed/update/<urn>/ (verified live 2026-08-08
+ * on both the company admin list and the personal activity feed).
+ */
+function findPublishedScript(url: string, snippet: string) {
+	const FIND = `(() => {
+	var cards = document.querySelectorAll('.feed-shared-update-v2[data-urn]');
+	var wanted = ${JSON.stringify(snippet)};
+	for (var i = 0; i < cards.length; i++) {
+		if ((cards[i].innerText || '').indexOf(wanted) !== -1) {
+			return { urn: cards[i].getAttribute('data-urn'), index: i, total: cards.length };
+		}
+	}
+	return { urn: null, index: -1, total: cards.length };
+})()`;
+	return `(async () => {
+	${taskSpace()}
+	await gotoAndWait(${JSON.stringify(url)}, { timeout: ${OPEN_TIMEOUT_S} });
+	let found = { urn: null, index: -1, total: 0 };
+	for (let i = 0; i < ${CONFIRM_POLL_ATTEMPTS}; i++) {
+		await wait(1);
+		found = await js(${JSON.stringify(FIND)});
+		if (found.urn) break;
+	}
+	cliLog(JSON.stringify(found));
 })();`;
 }
 
@@ -289,6 +344,14 @@ async function compose(account: AccountRecord, post: PostRecord, onProgress?: Pr
 	const companyId = account.company_id ?? '';
 	assertValidCompanyId(companyId);
 
+	// Only needed to read a personal post back afterwards; company posts are found by page id.
+	// Asked for up front so a session read never sits between the last guard and the click.
+	let personalSlug: string | null = null;
+	if (!companyId) {
+		const raw = await parseFirstLine<RawSession>(sessionReadScript(), EMPTY_SESSION);
+		personalSlug = raw.personal;
+	}
+
 	await onProgress?.(companyId ? `opening composer as company ${companyId}` : 'opening personal composer');
 	let state = await parseFirstLine<ComposerState>(openComposerScript(companyId), EMPTY_COMPOSER);
 	// Guard #1 — before a single keystroke.
@@ -339,9 +402,25 @@ async function compose(account: AccountRecord, post: PostRecord, onProgress?: Pr
 		throw new Error('LinkedIn did not confirm the post — the composer is still open with the draft in it.');
 	}
 
-	// No postUrl: LinkedIn exposes no permalink at compose time (see clickPostScript). `confirmed`
-	// alone satisfies hasPublishEvidence() in lib/worker.ts.
-	return { confirmed: true as const };
+	// A closed composer is not proof — it also closes on cancel. Read the post back from the
+	// identity's own list, which both confirms publication and yields the permalink.
+	await onProgress?.('confirming the post published');
+	const listUrl = verificationUrl(companyId, personalSlug ?? null);
+	if (!listUrl) {
+		// Personal account with no known profile slug: nothing to read back against. Report the
+		// weaker signal honestly rather than claiming a verification that never happened.
+		return { confirmed: true as const };
+	}
+	const found = await parseFirstLine<{ urn: string | null; index: number; total: number }>(
+		findPublishedScript(listUrl, confirmationSnippet(post.body)),
+		{ urn: null, index: -1, total: 0 },
+	);
+	if (!found.urn) {
+		throw new Error(
+			`LinkedIn closed the composer but the post is not in ${listUrl} (${found.total} posts scanned). It may not have published — check before retrying, or this will post twice.`,
+		);
+	}
+	return { confirmed: true as const, postUrl: `https://www.linkedin.com/feed/update/${found.urn}/` };
 }
 
 export const linkedinPlatform: EgoPlatformModule = {

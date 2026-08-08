@@ -3,7 +3,8 @@
 **Date:** 2026-08-08
 **Method:** ego-browser task space `linkedin posting recon`, against the live logged-in session.
 **Scope:** author identity (personal vs company pages), composer, media upload, draft persistence.
-**Not yet done:** publishing. No post has been made — the confirmation/permalink mechanism is unknown.
+**Result:** full loop verified with a real post to the Kasa page, first attempt, no bugs —
+[urn:li:activity:7491981299054882816](https://www.linkedin.com/feed/update/urn:li:activity:7491981299054882816/)
 
 ## The headline: identity comes from the URL, not from a control
 
@@ -90,19 +91,47 @@ click  Next                               # returns to composer with image attac
 --- end media ---
 guard  read the author again              # immediately before the irreversible click
 click  .share-actions__primary-action
-???    confirmation / permalink — UNKNOWN, needs a real post to establish
+wait   for the composer to close                    # necessary, but NOT proof — it closes on cancel too
+goto   <company admin post list | profile activity> # the real confirmation
+find   .feed-shared-update-v2[data-urn] whose innerText contains the body snippet
+build  https://www.linkedin.com/feed/update/<data-urn>/   # this IS posts.post_url
 ```
 
-## Open questions before this can ship
+## Confirmation and the permalink — solved
 
-- **Post confirmation and permalink.** X gives a toast carrying the absolute post URL, which is
-  where `posts.post_url` comes from. LinkedIn's equivalent is unknown and can only be found by
-  publishing once for real.
-- **Schema.** `accounts` currently has `platform` + `handle`. A LinkedIn account needs to record
-  *which identity* to post as — a company id (`107591805`) or "personal". `handle` alone cannot
-  express that, so this needs a field or a convention.
-- **Native scheduling.** LinkedIn has its own `Schedule post` control. Worth deciding whether to
-  use it or keep everything on our scheduler; using theirs would mean the post leaves our
-  control once queued.
+The previous Playwright module claimed "LinkedIn gives no reliable post URL after composing".
+That is true *of the composer* and false of LinkedIn: there is no URL at compose time, but every
+post that has actually published is listed as `.feed-shared-update-v2[data-urn]`, and
+`data-urn="urn:li:activity:<id>"` maps directly to `https://www.linkedin.com/feed/update/<urn>/`.
+Verified live — the captured permalink loads the post.
+
+Both identities expose the same component, so one implementation covers both:
+
+| Identity | Where to read the post back |
+|---|---|
+| Company page | `https://www.linkedin.com/company/<id>/admin/page-posts/published/` |
+| Personal | `https://www.linkedin.com/in/<slug>/recent-activity/all/` |
+
+**A closed composer is not confirmation.** It closes on cancel too, so treating it as success
+would mark a record `posted` that never went out. The read-back is the actual check; the closed
+composer is only the cue to go looking.
+
+## Settled
+
+- **Schema.** `accounts.company_id` — a page id posts as that company, empty posts as the personal
+  profile. `handle` holds the display name the guard compares the composer against, which is why
+  it cannot double as the id.
+- **Native scheduling.** Not used. LinkedIn's own `Schedule post` would take the post out of our
+  control once queued (no edit, no cancel from the app), so everything stays on our scheduler.
+
+## Still untested
+
+- **Personal-profile posting.** Only the company path has been exercised live. The personal path
+  shares all the same code and its read-back page was confirmed to use the same component, but no
+  personal post has been made.
+- **TechGFX.** Only Kasa (107591805) has published; TechGFX (112229576) is configured but unused.
 - **Multi-image and video.** The file input accepts both and is `multiple`; only a single image
   was exercised.
+- **Duplicate body text.** The read-back finds a post by matching its body snippet. Two posts with
+  identical opening text would match the newer one first, which is right, but it has not been
+  exercised.
