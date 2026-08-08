@@ -87,7 +87,10 @@ export async function generateImage(input: { persona: PersonaRecord; body: strin
 	// missing one should not stop a post going out. Override in the env collection to experiment.
 	const model = config.IMAGE_MODEL || 'gpt-image-2';
 	const quality = config.IMAGE_QUALITY || 'medium';
-	const size = config.IMAGE_SIZE || '1024x1024';
+	// 3:2 landscape at ~1.04M pixels — the same cost as a 1024x1024 square (gpt-image-2 bills in
+	// output tokens, so pixels are spend) but it fills the X timeline card instead of being
+	// side-cropped. See the migration for the arithmetic.
+	const size = config.IMAGE_SIZE || '1248x832';
 
 	const res = await fetch(ENDPOINT, {
 		method: 'POST',

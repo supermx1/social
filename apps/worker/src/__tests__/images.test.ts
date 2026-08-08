@@ -88,7 +88,7 @@ describe('generateImage', () => {
 		);
 
 		await generateImage({ persona: fakePersona(), body: 'hello' });
-		expect(calls[0]).toMatchObject({ model: 'gpt-image-2', quality: 'medium', size: '1024x1024', n: 1 });
+		expect(calls[0]).toMatchObject({ model: 'gpt-image-2', quality: 'medium', size: '1248x832', n: 1 });
 
 		config.IMAGE_QUALITY = 'high';
 		config.IMAGE_SIZE = '1536x1024';

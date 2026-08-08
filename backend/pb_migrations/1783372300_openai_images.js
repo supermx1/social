@@ -11,7 +11,11 @@
 const ENV_ADDITIONS = {
 	OPENAI_API_KEY: '',
 	IMAGE_QUALITY: 'medium', // low | medium | high | auto
-	IMAGE_SIZE: '1024x1024',
+	// 3:2 landscape, because a square gets side-cropped in the X timeline and wastes the focal
+	// point. Chosen at 1,038,336px — marginally FEWER pixels than 1024x1024's 1,048,576 — because
+	// gpt-image-2 bills in output tokens, so pixels are cost. 1536x1024 would be ~1.5x the spend.
+	// Both edges are multiples of 16, as the API requires.
+	IMAGE_SIZE: '1248x832',
 };
 
 const IMAGE_MODEL_NEW = 'gpt-image-2';
