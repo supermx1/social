@@ -24,3 +24,17 @@ export async function failJob(id: string, error: unknown, client: PBLike = pb) {
 		.collection('jobs')
 		.update(id, { status: 'error', error: error instanceof Error ? error.message : String(error) });
 }
+
+/**
+ * Records a live progress line on a running job (e.g. "switching account") so the UI can show
+ * what a multi-step job is doing instead of just "running" for its whole duration. Never throws:
+ * a progress update is a nicety, not part of the job's correctness, and must not turn a working
+ * publish into a failed one just because this PATCH raced a realtime unsubscribe or similar.
+ */
+export async function reportProgress(id: string, detail: string, client: PBLike = pb) {
+	try {
+		await client.collection('jobs').update(id, { detail });
+	} catch {
+		// best-effort — see doc comment
+	}
+}

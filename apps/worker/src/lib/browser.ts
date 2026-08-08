@@ -1,6 +1,7 @@
 import { ensureBrowser, runEgo } from './ego';
 import { getPlatform } from '../platforms';
 import { sessionHasHandle } from '../platforms/types';
+import type { ProgressReporter } from '../platforms/types';
 import type { AccountRecord, PostRecord } from '../types';
 
 let chain = Promise.resolve();
@@ -51,12 +52,12 @@ export async function warmSession(account: AccountRecord) {
 	const module = getPlatform(account.platform);
 	return enqueueBrowserTask(async () => {
 		await ensureBrowser();
-		const session = await module.warm();
+		const session = await module.warm(account.handle);
 		return sessionHasHandle(session, account.handle);
 	});
 }
 
-export async function composePost(account: AccountRecord, post: PostRecord) {
+export async function composePost(account: AccountRecord, post: PostRecord, onProgress?: ProgressReporter) {
 	const module = getPlatform(account.platform);
 	return enqueueBrowserTask(async () => {
 		await ensureBrowser();
@@ -67,6 +68,6 @@ export async function composePost(account: AccountRecord, post: PostRecord) {
 		// the extra runEgo round trip here is cheap at this job volume.
 		const active = await module.readSession();
 		if (!sessionHasHandle(active, account.handle)) throw new Error('Session is not active.');
-		return module.compose(account, post);
+		return module.compose(account, post, onProgress);
 	});
 }

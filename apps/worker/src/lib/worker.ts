@@ -4,7 +4,7 @@ import { composePost, loginStart, verifySession, warmSession } from './browser';
 import { generateDrafts } from './generator';
 import { pollFeed } from './feeds';
 import { generateImage, NoImageStyleError } from './images';
-import { claimNextJob, completeJob, failJob } from './jobs';
+import { claimNextJob, completeJob, failJob, reportProgress } from './jobs';
 import type { PBLike } from './jobs';
 import type { AccountRecord, JobRecord, PersonaRecord, Platform, PostRecord } from '../types';
 
@@ -80,10 +80,11 @@ async function markNeedsReauth(account: AccountRecord) {
 	await alertTelegram(`Re-auth needed for ${account.platform} ${account.handle || account.id}.`);
 }
 
-async function publishPost(post: PostRecord, account: AccountRecord) {
+async function publishPost(post: PostRecord, account: AccountRecord, jobId?: string) {
 	try {
 		await pb.collection('posts').update(post.id, { status: 'posting' });
-		const result = await composePost(account, post);
+		const onProgress = jobId ? (detail: string) => reportProgress(jobId, detail) : undefined;
+		const result = await composePost(account, post, onProgress);
 		if (!hasPublishEvidence(result)) {
 			throw new Error(`${account.platform} did not provide publish confirmation.`);
 		}
@@ -118,9 +119,13 @@ async function executeJob(job: JobRecord) {
 	switch (job.type) {
 		case 'login_start': {
 			if (!('accountId' in payload)) throw new Error('accountId missing');
-			const account = await getAccount(payload.accountId);
-			await loginStart(account); // returns when the operator closes the login window
-			await verifyAndRecord(account); // then confirm the session automatically
+			// Hands the shared browser to the operator and returns immediately — it does NOT wait
+			// for them to actually finish logging in (loginStart's own doc comment flags this).
+			// This used to be followed by an automatic verify, which fired the instant the tab
+			// opened — before the operator had any chance to log in — reporting a false
+			// "needs_reauth" and firing a spurious Telegram alert. Verification is what the
+			// separate "I'm logged in" button (login_confirm) is for; don't race it here.
+			await loginStart(await getAccount(payload.accountId));
 			break;
 		}
 		case 'login_confirm':
@@ -149,7 +154,7 @@ async function executeJob(job: JobRecord) {
 			if (!('postId' in payload)) throw new Error('postId missing');
 			const post = await pb.collection('posts').getOne<PostRecord>(payload.postId);
 			const account = await getAccount(post.account);
-			await publishPost(post, account);
+			await publishPost(post, account, job.id);
 			break;
 		}
 		case 'generate_image': {

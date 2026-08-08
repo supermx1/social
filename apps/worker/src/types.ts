@@ -133,4 +133,6 @@ export type JobRecord = Base & {
 	status: JobStatus;
 	error: string;
 	attempts: number;
+	/** Live progress line the worker updates mid-run, e.g. "switching account". */
+	detail: string;
 };

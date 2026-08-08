@@ -1,9 +1,11 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { page as pageStore } from '$app/state';
 	import { pb } from '$lib/pb';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
+	import Pager from '$lib/components/pager.svelte';
 	import DateTimePicker from '$lib/components/date-time-picker.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -44,21 +46,50 @@
 
 	onMount(() => subscribeToCollectionChanges(pb, ['posts', 'accounts', 'personas', 'topics'], invalidateAll));
 
-	// Filters — the full list is already loaded, so filtering is client-side.
-	let statusFilter = $state('all');
-	let personaFilter = $state('all');
-	const personaOptions = $derived(
-		[...new Map(data.posts.map((p) => [p.personaId, p.personaName])).entries()]
-			.filter(([id]) => id)
-			.map(([id, name]) => ({ id, name }))
-	);
-	const filteredPosts = $derived(
-		data.posts.filter(
-			(p) =>
-				(statusFilter === 'all' || p.status === statusFilter) &&
-				(personaFilter === 'all' || p.personaId === personaFilter)
-		)
-	);
+	// Filtering and pagination both happen server-side (queue/+page.ts) — this page can hold
+	// thousands of posts once evergreen batches and feed-driven drafts pile up, so "load
+	// everything, filter in the browser" stops being honest past a few dozen rows.
+	let statusFilter = $derived(data.statusFilter);
+	let personaFilter = $derived(data.personaFilter);
+
+	function applyFilters(next: { status?: string; persona?: string; page?: number }) {
+		const params = new URLSearchParams(pageStore.url.searchParams);
+		if (next.status !== undefined) params.set('status', next.status);
+		if (next.persona !== undefined) params.set('persona', next.persona);
+		params.set('page', String(next.page ?? 1)); // any filter change resets to page 1
+		goto(`?${params}`, { keepFocus: true, noScroll: true });
+	}
+
+	// Jobs still in flight for posts on THIS page, keyed by postId, for the live "posting…"
+	// detail next to the status badge (design doc: job status should show its current phase,
+	// not just "running", while ego-browser works through switch/type/upload/publish).
+	let liveJobDetail = $state<Record<string, string>>({});
+	async function refreshLiveJobs() {
+		const postIds = new Set(data.posts.filter((p) => p.status === 'posting').map((p) => p.id));
+		if (postIds.size === 0) {
+			liveJobDetail = {};
+			return;
+		}
+		// Bounded by definition: global browser concurrency is 1, so there is at most a
+		// handful of queued/running post_now jobs at any time — a plain getFullList is safe.
+		const jobs = await pb.collection('jobs').getFullList<{
+			payload: { postId?: string };
+			detail?: string;
+		}>({
+			filter: "type = 'post_now' && (status = 'queued' || status = 'running')"
+		});
+		const next: Record<string, string> = {};
+		for (const j of jobs) {
+			if (j.payload.postId && postIds.has(j.payload.postId)) next[j.payload.postId] = j.detail || 'working…';
+		}
+		liveJobDetail = next;
+	}
+	onMount(() => {
+		refreshLiveJobs();
+		const unsub = subscribeToCollectionChanges(pb, ['jobs'], refreshLiveJobs);
+		return unsub;
+	});
+
 	const statusOptions = ['draft', 'approved', 'scheduled', 'posting', 'posted', 'error', 'expired', 'skipped'];
 
 	// Edit & schedule dialog
@@ -145,7 +176,8 @@
 	{#snippet actions()}
 		<Select
 			type="single"
-			bind:value={statusFilter}
+			value={statusFilter}
+			onValueChange={(v) => applyFilters({ status: v })}
 			items={[{ value: 'all', label: 'All statuses' }, ...statusOptions.map((s) => ({ value: s, label: s }))]}
 		>
 			<SelectTrigger class="w-40"><SelectValue placeholder="Status" /></SelectTrigger>
@@ -158,16 +190,17 @@
 		</Select>
 		<Select
 			type="single"
-			bind:value={personaFilter}
+			value={personaFilter}
+			onValueChange={(v) => applyFilters({ persona: v })}
 			items={[
 				{ value: 'all', label: 'All personas' },
-				...personaOptions.map((p) => ({ value: p.id, label: p.name }))
+				...data.personas.map((p) => ({ value: p.id, label: p.name }))
 			]}
 		>
 			<SelectTrigger class="w-44"><SelectValue placeholder="Persona" /></SelectTrigger>
 			<SelectContent>
 				<SelectItem value="all" label="All personas">All personas</SelectItem>
-				{#each personaOptions as p (p.id)}
+				{#each data.personas as p (p.id)}
 					<SelectItem value={p.id} label={p.name}>{p.name}</SelectItem>
 				{/each}
 			</SelectContent>
@@ -183,7 +216,7 @@
 
 <Card>
 	<CardContent class="p-0">
-		{#if filteredPosts.length === 0}
+		{#if data.posts.length === 0}
 			<p class="p-5 text-sm font-medium text-muted-foreground">
 				No posts match these filters. Use Generate or Topics to create drafts.
 			</p>
@@ -199,7 +232,7 @@
 					</TableRow>
 				</TableHeader>
 				<TableBody>
-					{#each filteredPosts as post (post.id)}
+					{#each data.posts as post (post.id)}
 						<TableRow>
 							<TableCell>
 								<div class="font-semibold">{post.personaName}</div>
@@ -219,6 +252,9 @@
 									</Tooltip>
 								{:else}
 									<Badge variant={statusVariant(post.status)}>{post.status}</Badge>
+								{/if}
+								{#if post.status === 'posting' && liveJobDetail[post.id]}
+									<div class="mt-0.5 text-xs font-medium text-muted-foreground">{liveJobDetail[post.id]}</div>
 								{/if}
 							</TableCell>
 							<TableCell>
@@ -263,6 +299,13 @@
 					{/each}
 				</TableBody>
 			</Table>
+			<Pager
+				page={data.page}
+				totalPages={data.totalPages}
+				totalItems={data.totalItems}
+				onPrev={() => applyFilters({ page: data.page - 1 })}
+				onNext={() => applyFilters({ page: data.page + 1 })}
+			/>
 		{/if}
 	</CardContent>
 </Card>

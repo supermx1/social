@@ -110,7 +110,7 @@
 	}
 
 	const jobNotices: Record<string, string> = {
-		login_start: 'Log-in job queued — the worker will open a browser window. Log in there, then close the window; the session verifies automatically.',
+		login_start: 'Log-in job queued — ego lite will open this account’s login page and hand you the browser. Log in there, then come back and click “I’m logged in” to verify.',
 		login_confirm: 'Verifying session…',
 		warm: 'Warm-up job queued.',
 		verify: 'Verify job queued.'

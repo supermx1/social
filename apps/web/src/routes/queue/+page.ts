@@ -1,12 +1,42 @@
 import { pb } from '$lib/pb';
 
-export const load = async () => {
-	const posts = await pb.collection('posts').getFullList({
+const PER_PAGE = 50;
+
+export const load = async ({ url }) => {
+	const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+	const status = url.searchParams.get('status') || 'all';
+	const personaId = url.searchParams.get('persona') || 'all';
+
+	// Fetched independently of the paginated posts below, not derived from whatever page happens
+	// to be loaded — a persona with zero posts (or one that's only on page 3) still needs to show
+	// up as a filter option.
+	const [personas, accounts] = await Promise.all([
+		pb.collection('personas').getFullList({ sort: 'name' }),
+		pb.collection('accounts').getFullList({ sort: 'created' })
+	]);
+
+	const filters: string[] = [];
+	if (status !== 'all') filters.push(pb.filter('status = {:status}', { status }));
+	if (personaId !== 'all') {
+		// posts has no direct persona field — filter by the set of accounts that belong to it.
+		// PocketBase can't filter two relation hops (account.persona) directly, so resolve the
+		// account ids here instead.
+		const accountIds = accounts.filter((a) => a.persona === personaId).map((a) => a.id);
+		filters.push(
+			accountIds.length
+				? '(' + accountIds.map((id) => pb.filter('account = {:id}', { id })).join(' || ') + ')'
+				: 'account = "__none__"' // persona has no accounts yet — force zero results, not everything
+		);
+	}
+
+	const result = await pb.collection('posts').getList(page, PER_PAGE, {
+		filter: filters.join(' && '),
 		sort: '-created',
 		expand: 'account.persona,topic'
 	});
+
 	return {
-		posts: posts.map((p) => ({
+		posts: result.items.map((p) => ({
 			id: p.id,
 			personaId: p.expand?.account?.expand?.persona?.id ?? '',
 			personaName: p.expand?.account?.expand?.persona?.name ?? '',
@@ -25,6 +55,12 @@ export const load = async () => {
 			attempts: p.attempts,
 			variantGroup: p.variant_group,
 			errorMessage: p.error_message
-		}))
+		})),
+		page: result.page,
+		totalPages: result.totalPages,
+		totalItems: result.totalItems,
+		statusFilter: status,
+		personaFilter: personaId,
+		personas: personas.map((p) => ({ id: p.id, name: p.name }))
 	};
 };

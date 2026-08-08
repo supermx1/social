@@ -1,7 +1,7 @@
 import { runEgo } from '../lib/ego';
 import { resolve } from 'node:path';
 import type { AccountRecord, PostRecord } from '../types';
-import { normalizeHandle, type EgoPlatformModule, type SessionStatusResult } from './types';
+import { normalizeHandle, type EgoPlatformModule, type ProgressReporter, type SessionStatusResult } from './types';
 
 /**
  * X publishing over ego-browser, driven entirely by the recon in docs/x-posting-recon.md.
@@ -162,10 +162,9 @@ function attachedPreamble() {
 }
 
 /** Opens the switcher (if anyone's logged in) and reads full session status. */
-function sessionReadScript(extraBeforeProbe = '') {
+function sessionReadScript() {
 	return `(async () => {
 	${preamble()}
-	${extraBeforeProbe}
 	const probe = await js(${JSON.stringify(READ_SESSION_SNIPPET)});
 	if (!probe.activeHandle) {
 		cliLog(JSON.stringify({ activeHandle: null, otherHandles: [] }));
@@ -179,8 +178,18 @@ function sessionReadScript(extraBeforeProbe = '') {
 })();`;
 }
 
-function warmScript() {
-	return sessionReadScript('await scrollBy(600);\n\tawait wait(1);');
+/**
+ * Scrolls the CURRENTLY active account (attachedPreamble — no tab re-open, no account switch)
+ * and re-reads session status. Callers must switch to the target handle first; this only ever
+ * scrolls whoever is active when it runs, which is what warm() below is for.
+ */
+function scrollAndReadScript() {
+	return `(async () => {
+	${attachedPreamble()}
+	await scrollBy(600);
+	await wait(1);
+	cliLog(JSON.stringify(await js(${JSON.stringify(READ_SESSION_SNIPPET)})));
+})();`;
 }
 
 /** Opens the switcher, clicks the row matching `handle`, then polls for the switch to land. */
@@ -324,8 +333,22 @@ async function readSession(): Promise<SessionStatusResult> {
 	return parseFirstLine(sessionReadScript(), { activeHandle: null, otherHandles: [] });
 }
 
-async function warm(): Promise<SessionStatusResult> {
-	return parseFirstLine(warmScript(), { activeHandle: null, otherHandles: [] });
+/**
+ * Switches to `handle` if it isn't already active, then scrolls to look human. Previously this
+ * scrolled whichever account happened to already be active, regardless of which one was asked
+ * for — with four accounts one click apart, "warm @kasa_africa" could silently warm @TheAvgTechDad
+ * instead. Now it switches first, same as compose()'s guard #1.
+ */
+async function warm(handle: string): Promise<SessionStatusResult> {
+	assertValidHandle(handle);
+	const target = normalizeHandle(handle);
+	let session = await readSession();
+	if (!handleMatches(session.activeHandle, target)) {
+		if (!session.otherHandles.includes(`@${target}`)) return session; // no live session anywhere; nothing to warm
+		session = await switchAccount(target);
+		if (!handleMatches(session.activeHandle, target)) return session; // switch failed; report what we have
+	}
+	return parseFirstLine(scrollAndReadScript(), session);
 }
 
 async function switchAccount(handle: string): Promise<SessionStatusResult> {
@@ -353,7 +376,7 @@ function extractHandleFromPermalink(href: string): string | null {
 }
 
 /** Guard #1 (design §2.3): read before composing, unconditionally. Switches if needed. */
-async function ensureActiveAccount(account: AccountRecord): Promise<void> {
+async function ensureActiveAccount(account: AccountRecord, onProgress?: ProgressReporter): Promise<void> {
 	assertValidHandle(account.handle);
 	const handle = normalizeHandle(account.handle);
 	let session = await readSession();
@@ -361,16 +384,19 @@ async function ensureActiveAccount(account: AccountRecord): Promise<void> {
 	if (!session.otherHandles.includes(`@${handle}`)) {
 		throw new Error(`X account @${handle} has no live session (active: ${session.activeHandle ?? 'none'}).`);
 	}
+	await onProgress?.(`switching to @${handle}`);
 	session = await switchAccount(handle);
 	if (!handleMatches(session.activeHandle, handle)) {
 		throw new Error(`Failed to switch X to @${handle}; still on ${session.activeHandle ?? 'none'}.`);
 	}
 }
 
-async function compose(account: AccountRecord, post: PostRecord) {
+async function compose(account: AccountRecord, post: PostRecord, onProgress?: ProgressReporter) {
+	await onProgress?.('checking account session');
 	// Guard #1 — nothing below runs, no compose script and no click, unless this passes.
-	await ensureActiveAccount(account);
+	await ensureActiveAccount(account, onProgress);
 
+	await onProgress?.('typing post text');
 	const typed = await typeComposer(post.body);
 	if (!sameText(typed.editorText, post.body)) {
 		throw new Error(
@@ -385,6 +411,7 @@ async function compose(account: AccountRecord, post: PostRecord) {
 		throw new Error(`X accepts at most ${MAX_MEDIA} images per post; this post has ${media.length}.`);
 	}
 	if (media.length) {
+		await onProgress?.(`uploading ${media.length} image${media.length > 1 ? 's' : ''}`);
 		const state = await attachMedia(media);
 		if (state.ready < media.length || state.uploading) {
 			throw new Error(
@@ -403,6 +430,7 @@ async function compose(account: AccountRecord, post: PostRecord) {
 		);
 	}
 
+	await onProgress?.('publishing');
 	const outcome = await clickPostAndConfirm();
 	const toast = outcome.toast;
 	if (!toast || !toast.href) {

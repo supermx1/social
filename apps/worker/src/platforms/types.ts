@@ -30,6 +30,9 @@ export type SessionStatusResult = {
 
 export type ComposeResult = { postUrl?: string; confirmed?: boolean };
 
+/** Reports a human-readable progress line, e.g. "switching account". Never throws — see jobs.ts. */
+export type ProgressReporter = (detail: string) => void | Promise<void>;
+
 /**
  * ego-browser-driven platform module. No `Page` — every method drives the shared,
  * resident browser session via `runEgo` (lib/ego.ts) and reports back what it read.
@@ -41,10 +44,15 @@ export type EgoPlatformModule = {
 	taskSpace: string;
 	/** One page read: who's active, plus every other account with a live session. */
 	readSession(): Promise<SessionStatusResult>;
-	/** Look human (scroll, dwell) and report session status the same way readSession does. */
-	warm(): Promise<SessionStatusResult>;
+	/**
+	 * Switches to `handle` if it isn't already active, then looks human (scroll, dwell).
+	 * Takes a handle — not just "warm whatever's active" — because warming is meant to keep
+	 * THIS account's session looking used; warming a different account by accident defeats
+	 * the point (this was a real bug: the previous warm() ignored which account was asked for).
+	 */
+	warm(handle: string): Promise<SessionStatusResult>;
 	/** Switch to `account` if needed (guarded), compose `post`, publish, confirm via the toast. */
-	compose(account: AccountRecord, post: PostRecord): Promise<ComposeResult>;
+	compose(account: AccountRecord, post: PostRecord, onProgress?: ProgressReporter): Promise<ComposeResult>;
 };
 
 /**

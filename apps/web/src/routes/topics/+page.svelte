@@ -1,11 +1,13 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { page as pageStore } from '$app/state';
 	import { pb } from '$lib/pb';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
 	import { textValue, numberValue, idsValue } from '$lib/forms';
 	import { statusVariant } from '$lib/status';
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
+	import Pager from '$lib/components/pager.svelte';
 	import DateTimePicker from '$lib/components/date-time-picker.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -132,6 +134,12 @@
 			error = err instanceof Error ? err.message : String(err);
 		}
 	}
+
+	function goToPage(n: number) {
+		const params = new URLSearchParams(pageStore.url.searchParams);
+		params.set('page', String(n));
+		goto(`?${params}`, { keepFocus: true, noScroll: true });
+	}
 </script>
 
 <PageHeader
@@ -216,6 +224,13 @@
 					{/each}
 				</TableBody>
 			</Table>
+			<Pager
+				page={data.page}
+				totalPages={data.totalPages}
+				totalItems={data.totalItems}
+				onPrev={() => goToPage(data.page - 1)}
+				onNext={() => goToPage(data.page + 1)}
+			/>
 		{/if}
 	</CardContent>
 </Card>

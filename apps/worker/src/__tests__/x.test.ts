@@ -168,6 +168,83 @@ describe('X compose — the account guard (design doc §2.3)', () => {
 		await expect(xPlatform.compose(account, withImage)).rejects.toThrow(/did not finish attaching media/);
 		expect(runEgo).toHaveBeenCalledTimes(3); // click script never runs
 	});
+
+	// onProgress is what the Activity/Queue UI shows while a multi-step publish is in flight
+	// (a post with media can take 20-30s of real time) — regressions here are invisible in the
+	// final result, only in what the operator sees change during the run.
+	it('reports progress phases in order, including the switch and the media upload', async () => {
+		const withImage = { id: 'post5', body: 'switch and upload', media: ['/tmp/one.png'] } as unknown as PostRecord;
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@super__mx', otherHandles: ['@TheAvgTechDad'] })) // ensureActiveAccount read
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: ['@super__mx'] })) // switch
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', editorText: withImage.body })) // type
+			.mockResolvedValueOnce(line({ ready: 1, uploading: false })) // attachMedia
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] })) // guard #2
+			.mockResolvedValueOnce(
+				line({ toast: { text: 'Your post was sent. | View', href: 'https://x.com/TheAvgTechDad/status/9' }, composerEmpty: true }),
+			);
+
+		const seen: string[] = [];
+		await xPlatform.compose(account, withImage, (detail) => {
+			seen.push(detail);
+		});
+
+		expect(seen).toEqual([
+			'checking account session',
+			'switching to @TheAvgTechDad',
+			'typing post text',
+			'uploading 1 image',
+			'publishing',
+		]);
+	});
+
+	it('does not report a switch when the target account is already active', async () => {
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] }))
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', editorText: post.body }))
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] }))
+			.mockResolvedValueOnce(
+				line({ toast: { text: 'Your post was sent. | View', href: 'https://x.com/TheAvgTechDad/status/9' }, composerEmpty: true }),
+			);
+
+		const seen: string[] = [];
+		await xPlatform.compose(account, post, (detail) => {
+			seen.push(detail);
+		});
+
+		expect(seen).toEqual(['checking account session', 'typing post text', 'publishing']);
+	});
+});
+
+describe('X warm — targets the requested account, not whatever is active (real bug fixed 2026-08-08)', () => {
+	beforeEach(() => {
+		runEgo.mockReset();
+	});
+
+	it('switches to the requested handle before scrolling, when a different account is active', async () => {
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@super__mx', otherHandles: ['@TheAvgTechDad'] })) // readSession
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: ['@super__mx'] })) // switchAccount
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] })); // scroll + reread
+
+		const result = await xPlatform.warm('TheAvgTechDad');
+
+		expect(result.activeHandle).toBe('@TheAvgTechDad');
+		expect(runEgo).toHaveBeenCalledTimes(3);
+		expect(runEgo.mock.calls[1][0]).toContain('switch x account');
+		expect(runEgo.mock.calls[2][0]).toContain('scrollBy');
+	});
+
+	it('scrolls directly, without switching, when the requested handle is already active', async () => {
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] })) // readSession
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] })); // scroll + reread
+
+		const result = await xPlatform.warm('TheAvgTechDad');
+
+		expect(result.activeHandle).toBe('@TheAvgTechDad');
+		expect(runEgo).toHaveBeenCalledTimes(2); // no switch script call
+	});
 });
 
 // --- Fake DOM for the scoping algorithm (recon traps #1-#2) --------------------------------
