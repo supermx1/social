@@ -113,10 +113,35 @@ Two notes from the run:
   before the toast auto-dismisses; if missed, fall back to the account's latest
   post on `/{handle}`.
 
+## Media upload (verified 2026-08-08)
+
+`uploadFile('input[data-testid="fileInput"]', absolutePath)` works on the hidden input. After it,
+X renders `[data-testid="attachments"]` holding one `img[src^="blob:"]` per file, and shows
+`[data-testid="progressBar-bar"]` while the upload is still in flight.
+
+**Both conditions are needed.** The `img` appears *before* the upload completes, so counting
+images alone will let you click Post mid-upload.
+
+## ego-browser behaviours that cost real debugging time
+
+None of these are X's doing; they are how the CLI behaves, and each one failed silently.
+
+1. **`cliLog` writes to STDERR, not stdout.** A runner that reads only stdout gets an empty array
+   from every single call, and the failure looks like "the browser never became ready".
+2. **`click()` takes one selector, not a list.** A comma-separated CSS list matches nothing and
+   the click silently does not happen — visible only as an action that never took effect.
+3. **A click from a script that begins with `openOrReuseTab` does not register.** The identical
+   click from a script without it works every time. Scripts that act on already-staged page state
+   must not re-open the tab first.
+4. **State persists across scripts, and `typeText` inserts at the cursor.** `openOrReuseTab` does
+   *not* clear the composer, so a failed run leaves its text and media staged and the next run
+   splices its draft into the middle of the old one. `gotoAndWait` is what actually clears it.
+5. **The composer needs a settle delay before it accepts the Post click.** Clicking ~1s after the
+   upload script exits reliably does nothing; the same click succeeds after a few seconds.
+
 ## Not yet tested
 
-- Media upload via `fileInput`.
 - Dead-session / re-auth detection and `handOffTaskSpace`.
-- Posting from a *non-active* account, i.e. switch-then-post in one job. Switching
-  and posting were each verified separately, never chained.
+- Multi-line posts. Only single-line bodies have gone out live.
+- More than one image on a post (the 4-image path is coded but unexercised).
 - Anything other than X. LinkedIn, Instagram, TikTok all unexamined.
