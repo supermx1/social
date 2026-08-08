@@ -4,116 +4,21 @@
 // Pure DB logic runs in-process here; anything needing a browser or the model
 // is handed to the worker by creating a `jobs` record. Every cron body is
 // wrapped in try/catch — a throwing cron would kill the tick.
-
-const scheduler = require(`${__hooks}/lib/scheduler.js`);
-
-/* ---------- helpers ---------- */
-
-// Minutes-since-midnight of `date` in an IANA `timezone`, for goja (no Intl).
-// Parses the UTC wall-clock string AS the target zone via PocketBase's Go-backed
-// DateTime to recover the zone's current offset (DST-correct), then applies it.
-function tzMinutes(date, timezone) {
-	if (!timezone) return date.getUTCHours() * 60 + date.getUTCMinutes();
-	const wall = date.toISOString().slice(0, 19).replace('T', ' '); // "YYYY-MM-DD HH:MM:SS"
-	const zoneInstant = Date.parse(new DateTime(wall, timezone).string().replace(' ', 'T'));
-	const local = new Date(date.getTime() + (date.getTime() - zoneInstant));
-	return local.getUTCHours() * 60 + local.getUTCMinutes();
-}
-
-// PB DateTime -> ISO string ("2026-07-07T12:00:00.000Z") or null when empty.
-function isoOrNull(record, field) {
-	const v = record.get(field);
-	if (!v) return null;
-	const s = typeof v === 'string' ? v : v.string ? v.string() : String(v);
-	return s ? s.replace(' ', 'T') : null;
-}
-
-// JS Date | ISO string -> PB date literal ("2026-07-07 12:00:00.000Z").
-function toPbDate(d) {
-	return (d instanceof Date ? d : new Date(d)).toISOString().replace('T', ' ');
-}
-
-// Superuser-only runtime config (§6.9).
-function envGet(key, fallback) {
-	try {
-		return $app.findFirstRecordByFilter('env', 'key = {:k}', { k: key }).getString('value') || fallback;
-	} catch (_) {
-		return fallback;
-	}
-}
-
-function payloadOf(record) {
-	try {
-		return JSON.parse(record.getString('payload') || '{}');
-	} catch (_) {
-		return {};
-	}
-}
-
-// True if a queued/running job of `type` already targets this entity — prevents
-// double-enqueue across ticks while the worker is mid-job.
-function jobExists(type, idKey, idVal) {
-	try {
-		const rows = $app.findRecordsByFilter(
-			'jobs',
-			"type = {:t} && (status = 'queued' || status = 'running')",
-			'',
-			0,
-			0,
-			{ t: type },
-		);
-		return rows.some((r) => String(payloadOf(r)[idKey]) === String(idVal));
-	} catch (_) {
-		return false;
-	}
-}
-
-function createJob(type, payload) {
-	const job = new Record($app.findCollectionByNameOrId('jobs'));
-	job.set('type', type);
-	job.set('payload', payload);
-	job.set('status', 'queued');
-	job.set('attempts', 0);
-	$app.save(job);
-}
-
-function publishedToday(accountId) {
-	const start = new Date();
-	start.setHours(0, 0, 0, 0); // host-local day, matches the original worker.ts
-	try {
-		return $app.findRecordsByFilter(
-			'posts',
-			"account = {:a} && status = 'posted' && posted_at >= {:s}",
-			'',
-			0,
-			0,
-			{ a: accountId, s: toPbDate(start) },
-		).length;
-	} catch (_) {
-		return 0;
-	}
-}
-
-function lastPostedAt(accountId) {
-	try {
-		const rows = $app.findRecordsByFilter(
-			'posts',
-			"account = {:a} && status = 'posted' && posted_at != ''",
-			'-posted_at',
-			1,
-			0,
-			{ a: accountId },
-		);
-		return rows.length ? isoOrNull(rows[0], 'posted_at') : null;
-	} catch (_) {
-		return null;
-	}
-}
+//
+// IMPORTANT: PocketBase runs each cron handler in its OWN isolated JSVM context, so a handler
+// CANNOT see this file's top-level scope. Anything shared must be require()'d INSIDE the callback.
+// Helpers previously defined at the top of this file were invisible at runtime and every cron
+// died on its first helper call ("ReferenceError: toPbDate is not defined"), swallowed by the
+// try/catch into a log line — which is what silently stopped feed polling for a month.
+// Do not hoist these requires back to the top of the file.
 
 /* ---------- scheduler: every minute (§7.5) ---------- */
 
 cronAdd('scheduler', '* * * * *', () => {
 	try {
+		const scheduler = require(`${__hooks}/lib/scheduler.js`);
+		const h = require(`${__hooks}/lib/helpers.js`);
+
 		const state = $app.findFirstRecordByFilter('app_state', "id != ''");
 		if (state && state.getBool('paused')) return;
 
@@ -127,15 +32,15 @@ cronAdd('scheduler', '* * * * *', () => {
 
 			const action = scheduler.chooseSchedulerAction({
 				now: new Date(),
-				tzMinutes: tzMinutes,
+				tzMinutes: h.tzMinutes,
 				post: {
 					id: post.id,
 					status: post.getString('status'),
 					timingMode: post.getString('timing_mode'),
-					scheduledFor: isoOrNull(post, 'scheduled_for'),
-					randomWindowStart: isoOrNull(post, 'random_window_start'),
-					randomWindowEnd: isoOrNull(post, 'random_window_end'),
-					topicExpiresAt: topic ? isoOrNull(topic, 'expires_at') : null,
+					scheduledFor: h.isoOrNull(post, 'scheduled_for'),
+					randomWindowStart: h.isoOrNull(post, 'random_window_start'),
+					randomWindowEnd: h.isoOrNull(post, 'random_window_end'),
+					topicExpiresAt: topic ? h.isoOrNull(topic, 'expires_at') : null,
 				},
 				account: {
 					active: account.getBool('active'),
@@ -146,8 +51,8 @@ cronAdd('scheduler', '* * * * *', () => {
 					maxPostsPerDay: account.getInt('max_posts_per_day'),
 					minGapMinutes: account.getInt('min_gap_minutes'),
 				},
-				publishedToday: publishedToday(account.id),
-				lastPostedAt: lastPostedAt(account.id),
+				publishedToday: h.publishedToday(account.id),
+				lastPostedAt: h.lastPostedAt(account.id),
 			});
 
 			if (action.type === 'expire') {
@@ -155,15 +60,15 @@ cronAdd('scheduler', '* * * * *', () => {
 				$app.save(post);
 			} else if (action.type === 'schedule') {
 				post.set('status', 'scheduled');
-				post.set('scheduled_for', toPbDate(action.scheduledFor));
+				post.set('scheduled_for', h.toPbDate(action.scheduledFor));
 				$app.save(post);
-			} else if (action.type === 'enqueue' && !jobExists('post_now', 'postId', post.id)) {
-				createJob('post_now', { postId: post.id });
+			} else if (action.type === 'enqueue' && !h.jobExists('post_now', 'postId', post.id)) {
+				h.createJob('post_now', { postId: post.id });
 			}
 		}
 
 		// Catch-up guard: scheduled posts >24h past due are skipped, never burst-posted (§7.5).
-		const cutoff = toPbDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
+		const cutoff = h.toPbDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
 		const stale = $app.findRecordsByFilter(
 			'posts',
 			"status = 'scheduled' && scheduled_for != '' && scheduled_for < {:c}",
@@ -185,14 +90,15 @@ cronAdd('scheduler', '* * * * *', () => {
 
 cronAdd('keepwarm', '*/30 * * * *', () => {
 	try {
+		const h = require(`${__hooks}/lib/helpers.js`);
 		const accounts = $app.findRecordsByFilter('accounts', "active = true && session_status = 'active'", '', 0, 0, {});
 		const now = Date.now();
 		for (const a of accounts) {
-			const last = isoOrNull(a, 'last_warmed_at');
+			const last = h.isoOrNull(a, 'last_warmed_at');
 			// ponytail: fixed 12h + 0–6h jitter, re-rolled each tick; make per-account if it ever matters
 			const threshold = (12 + Math.random() * 6) * 3600 * 1000;
 			if (last && now - new Date(last).getTime() < threshold) continue;
-			if (!jobExists('warm', 'accountId', a.id)) createJob('warm', { accountId: a.id });
+			if (!h.jobExists('warm', 'accountId', a.id)) h.createJob('warm', { accountId: a.id });
 		}
 	} catch (err) {
 		console.error('keepwarm cron:', err);
@@ -203,13 +109,14 @@ cronAdd('keepwarm', '*/30 * * * *', () => {
 
 cronAdd('feedpoll', '*/15 * * * *', () => {
 	try {
+		const h = require(`${__hooks}/lib/helpers.js`);
 		const feeds = $app.findRecordsByFilter('feeds', 'active = true', '', 0, 0, {});
 		const now = Date.now();
 		for (const f of feeds) {
 			const interval = (f.getInt('poll_interval_minutes') || 180) * 60000;
-			const last = isoOrNull(f, 'last_polled_at');
+			const last = h.isoOrNull(f, 'last_polled_at');
 			if (last && now - new Date(last).getTime() < interval) continue;
-			if (!jobExists('feed_poll', 'feedId', f.id)) createJob('feed_poll', { feedId: f.id });
+			if (!h.jobExists('feed_poll', 'feedId', f.id)) h.createJob('feed_poll', { feedId: f.id });
 		}
 	} catch (err) {
 		console.error('feedpoll cron:', err);
@@ -220,8 +127,9 @@ cronAdd('feedpoll', '*/15 * * * *', () => {
 
 cronAdd('topicttl', '0 3 * * *', () => {
 	try {
-		const days = Number(envGet('TOPIC_INBOX_TTL_DAYS', '7')) || 7;
-		const cutoff = toPbDate(new Date(Date.now() - days * 86400000));
+		const h = require(`${__hooks}/lib/helpers.js`);
+		const days = Number(h.envGet('TOPIC_INBOX_TTL_DAYS', '7')) || 7;
+		const cutoff = h.toPbDate(new Date(Date.now() - days * 86400000));
 		const stale = $app.findRecordsByFilter('topics', "status = 'new' && created < {:c}", '', 0, 0, { c: cutoff });
 		for (const t of stale) {
 			t.set('status', 'dismissed');
