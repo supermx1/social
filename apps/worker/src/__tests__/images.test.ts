@@ -29,29 +29,35 @@ function fakePersona(overrides: Partial<PersonaRecord> = {}): PersonaRecord {
 }
 
 /** Real file signatures — extFromBytes sniffs these, so placeholder bytes are not valid input. */
-const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('jpeg payload')]);
 const PNG = Buffer.concat([
 	Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
 	Buffer.from('png payload'),
 ]);
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('jpeg payload')]);
+
+function imageResponse(bytes: Buffer) {
+	return new Response(JSON.stringify({ data: [{ b64_json: bytes.toString('base64') }] }), {
+		status: 200,
+		headers: { 'content-type': 'application/json' },
+	});
+}
 
 let mediaDir: string;
 
 beforeEach(async () => {
 	mediaDir = await mkdtemp(join(tmpdir(), 'images-test-'));
-	config.CF_ACCOUNT_ID = 'acct123';
-	config.CF_API_TOKEN = 'tok123';
-	config.IMAGE_MODEL = '@cf/leonardo/lucid-origin';
+	config.OPENAI_API_KEY = 'sk-test';
 	config.MEDIA_DIR = mediaDir;
 });
 
 afterEach(async () => {
 	vi.unstubAllGlobals();
 	await rm(mediaDir, { recursive: true, force: true });
-	delete config.CF_ACCOUNT_ID;
-	delete config.CF_API_TOKEN;
-	delete config.IMAGE_MODEL;
+	delete config.OPENAI_API_KEY;
 	delete config.MEDIA_DIR;
+	delete config.IMAGE_MODEL;
+	delete config.IMAGE_QUALITY;
+	delete config.IMAGE_SIZE;
 });
 
 describe('generateImage', () => {
@@ -61,18 +67,33 @@ describe('generateImage', () => {
 			'fetch',
 			vi.fn(async (_url: string, opts: RequestInit) => {
 				sentBody = String(opts.body);
-				return new Response(JSON.stringify({ result: { image: JPEG.toString('base64') } }), {
-					status: 200,
-					headers: { 'content-type': 'application/json' },
-				});
+				return imageResponse(PNG);
 			}),
 		);
 
 		await generateImage({ persona: fakePersona(), body: 'a normal post about gardening' });
 
-		expect(sentBody).toBeDefined();
 		const parsed = JSON.parse(sentBody as string);
 		expect(parsed.prompt).toContain('warm, hand-drawn illustration, earthy palette');
+	});
+
+	it('defaults to gpt-image-2 at medium quality, overridable from the env collection', async () => {
+		const calls: Record<string, unknown>[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: string, opts: RequestInit) => {
+				calls.push(JSON.parse(String(opts.body)));
+				return imageResponse(PNG);
+			}),
+		);
+
+		await generateImage({ persona: fakePersona(), body: 'hello' });
+		expect(calls[0]).toMatchObject({ model: 'gpt-image-2', quality: 'medium', size: '1024x1024', n: 1 });
+
+		config.IMAGE_QUALITY = 'high';
+		config.IMAGE_SIZE = '1536x1024';
+		await generateImage({ persona: fakePersona(), body: 'hello' });
+		expect(calls[1]).toMatchObject({ quality: 'high', size: '1536x1024' });
 	});
 
 	it('treats the post body as untrusted reference text, not an instruction', async () => {
@@ -81,10 +102,7 @@ describe('generateImage', () => {
 			'fetch',
 			vi.fn(async (_url: string, opts: RequestInit) => {
 				sentPrompt = JSON.parse(String(opts.body)).prompt;
-				return new Response(JSON.stringify({ result: { image: JPEG.toString('base64') } }), {
-					status: 200,
-					headers: { 'content-type': 'application/json' },
-				});
+				return imageResponse(PNG);
 			}),
 		);
 
@@ -99,60 +117,28 @@ describe('generateImage', () => {
 		);
 	});
 
-	it('writes base64-JSON response bytes to MEDIA_DIR and returns an absolute path', async () => {
-		const original = JPEG;
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () =>
-				new Response(JSON.stringify({ result: { image: original.toString('base64') } }), {
-					status: 200,
-					headers: { 'content-type': 'application/json' },
-				}),
-			),
-		);
+	it('writes the decoded bytes to MEDIA_DIR and returns an absolute path', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => imageResponse(PNG)));
 
 		const path = await generateImage({ persona: fakePersona(), body: 'hello world' });
 
 		expect(path.startsWith(mediaDir)).toBe(true);
-		const written = await readFile(path);
-		expect(written.equals(original)).toBe(true);
-	});
-
-	it('writes raw binary response bytes to MEDIA_DIR and returns the written path', async () => {
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () => new Response(PNG, { status: 200, headers: { 'content-type': 'image/png' } })),
-		);
-
-		const path = await generateImage({ persona: fakePersona(), body: 'hello world' });
-
 		expect(path.endsWith('.png')).toBe(true);
 		expect((await readFile(path)).equals(PNG)).toBe(true);
 	});
 
-	// Regression: verified against the live API 2026-08-08 —
-	// @cf/bytedance/stable-diffusion-xl-lightning sends `content-type: image/png` with JPEG bytes.
-	// The extension must follow the bytes, or we write a .png that no uploader will accept.
-	it('names the file from the magic bytes, not a mismatched content-type header', async () => {
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () => new Response(JPEG, { status: 200, headers: { 'content-type': 'image/png' } })),
-		);
+	// The API defaults to PNG but supports JPEG/WebP, and a declared format is not proof of
+	// content — the extension follows the bytes so the file is never mislabelled for upload.
+	it('names the file from the magic bytes, not the requested format', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => imageResponse(JPEG)));
 
 		const path = await generateImage({ persona: fakePersona(), body: 'hello world' });
 
 		expect(path.endsWith('.jpg')).toBe(true);
-		expect((await readFile(path)).equals(JPEG)).toBe(true);
 	});
 
 	it('rejects a 200 response whose bytes are not a recognized image', async () => {
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () => new Response(Buffer.from('totally not an image'), {
-				status: 200,
-				headers: { 'content-type': 'image/png' },
-			})),
-		);
+		vi.stubGlobal('fetch', vi.fn(async () => imageResponse(Buffer.from('totally not an image'))));
 
 		await expect(generateImage({ persona: fakePersona(), body: 'hello world' })).rejects.toThrow(
 			/not a recognized image/,
@@ -172,48 +158,32 @@ describe('generateImage', () => {
 		expect(await readdir(mediaDir)).toHaveLength(0);
 	});
 
-	it('surfaces a clear error and writes no file when the API call fails', async () => {
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () => new Response('service unavailable', { status: 503 })),
-		);
+	it('fails clearly and writes no file when OPENAI_API_KEY is missing', async () => {
+		delete config.OPENAI_API_KEY;
+		const fetchSpy = vi.fn();
+		vi.stubGlobal('fetch', fetchSpy);
 
-		await expect(generateImage({ persona: fakePersona(), body: 'hello world' })).rejects.toThrow(
-			/Workers AI image request failed \(503\)/,
-		);
-		expect(await readdir(mediaDir)).toHaveLength(0);
+		await expect(generateImage({ persona: fakePersona(), body: 'hello' })).rejects.toThrow(/OPENAI_API_KEY/);
+		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
-	// flux-1-schnell refuses benign prompts as NSFW (3 of 4 attempts, measured 2026-08-08).
-	// The operator gets this text in a Telegram alert, so it has to be Cloudflare's message.
-	it("surfaces Cloudflare's own error message from a refusal envelope", async () => {
+	// gpt-image models require API Organization Verification; an unverified account fails here.
+	// The operator sees this text in a Telegram alert, so it has to be OpenAI's own message.
+	it("surfaces OpenAI's own error message", async () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () =>
 				new Response(
 					JSON.stringify({
-						success: false,
-						errors: [{ message: 'AiError: Input prompt contains NSFW content.', code: 3030 }],
+						error: { message: 'Your organization must be verified to use the model `gpt-image-2`.' },
 					}),
-					{ status: 400, headers: { 'content-type': 'application/json' } },
+					{ status: 403, headers: { 'content-type': 'application/json' } },
 				),
 			),
 		);
 
 		await expect(generateImage({ persona: fakePersona(), body: 'hello world' })).rejects.toThrow(
-			/NSFW content/,
-		);
-		expect(await readdir(mediaDir)).toHaveLength(0);
-	});
-
-	it('surfaces a clear error and writes no file on an unrecognized response shape', async () => {
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async () => new Response('not json, not an image', { status: 200, headers: { 'content-type': 'text/plain' } })),
-		);
-
-		await expect(generateImage({ persona: fakePersona(), body: 'hello world' })).rejects.toThrow(
-			/unrecognized content-type/,
+			/organization must be verified/,
 		);
 		expect(await readdir(mediaDir)).toHaveLength(0);
 	});

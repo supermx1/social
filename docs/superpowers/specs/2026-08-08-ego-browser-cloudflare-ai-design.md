@@ -142,18 +142,38 @@ At **draft** time, alongside the text, so the operator reviews the image before 
 
 No per-platform image matrix. `image_style` set plus `withImages` is the whole control surface.
 
-### 4.3 Module
+### 4.3 Module — OpenAI, not Workers AI
 
-New `apps/worker/src/lib/images.ts`:
+Images run on the **OpenAI Images API**; text stays on Workers AI. The two providers are split
+deliberately, for one reason that matters more than price: on Workers AI they shared a single
+neuron budget, and images exhausted the daily allocation in about a dozen generations, after which
+**text generation failed too** (§3.1). Splitting them means a batch of images can never starve the
+drafting the whole product depends on.
 
-- Builds the prompt from `persona.image_style` + the post body.
-- POSTs to the Workers AI image model, writes the returned bytes to `MEDIA_DIR` under a UUID filename, returns the path.
-- `posts.media` already exists as `string[]` and stores paths, not bytes (§242) — no schema change needed there.
-- Model in `env` as `IMAGE_MODEL`. Same account ID and token as text, so no new credentials.
+Price was *not* the deciding factor — at ~65 images/month the entire spread between every option
+considered is a few dollars (§4.5).
 
-### 4.4 Model selection — measured, not assumed
+`apps/worker/src/lib/images.ts`:
 
-Tested against the live API on 2026-08-08 with identical benign prompts:
+- Builds the prompt from `persona.image_style` + the post body, body treated as untrusted.
+- POSTs to `https://api.openai.com/v1/images/generations`, decodes `data[0].b64_json`, writes the
+  bytes to `MEDIA_DIR` under a UUID filename, returns an **absolute** path (`resolve`, not `join` —
+  the browser uploads from a filesystem path but `MEDIA_DIR` may be relative).
+- `posts.media` already exists as `string[]` and stores paths, not bytes (§242) — no change there.
+- `env`: `OPENAI_API_KEY` (required), `IMAGE_MODEL` (default `gpt-image-2`), `IMAGE_QUALITY`
+  (default `medium`), `IMAGE_SIZE` (default `1024x1024`). Quality/size/model have working defaults
+  rather than being required, so a missing one never stops a post going out.
+- 120s `AbortSignal.timeout` — image models take tens of seconds, node's `fetch` has no default
+  timeout, and a hung request would stall a queue whose browser concurrency is 1.
+
+**`gpt-image-2` requires API Organization Verification** in the OpenAI developer console. An
+unverified account gets a 403; the module surfaces OpenAI's own message so that is diagnosable
+from a Telegram alert rather than looking like a code fault.
+
+### 4.4 What the Workers AI image testing established
+
+These measurements are why images left Workers AI, and two of them shaped code that survives the
+move. Tested live on 2026-08-08 with identical benign prompts:
 
 | Model | Response shape | `content-type` | Actual bytes | Result |
 |---|---|---|---|---|
@@ -170,9 +190,30 @@ Three findings that shaped the code:
 2. **Both response shapes are real**, so the dual branch is required, not defensive padding — Leonardo `lucid-origin` returns base64-in-JSON while `phoenix-1.0` and the SDXL models return raw bytes.
 3. **`content-type` cannot be trusted for the file extension.** `stable-diffusion-xl-lightning` reports `image/png` and returns JPEG bytes. The extension is therefore sniffed from magic bytes; the header only selects the parse branch. A `.png` file holding JPEG data would otherwise fail much later, at upload time, far from its cause.
 
-The FLUX.2 family (`flux-2-dev`, `flux-2-klein-*`) needs a `multipart` request body rather than `{"prompt": ...}`, so it is not reachable through this code path. Not worth supporting until there's a reason to prefer it.
+Finding 3 is the one that outlived the provider change: `images.ts` still sniffs magic bytes
+rather than trusting any declared format, because a declared format is not proof of content
+anywhere. Finding 1 is moot now, and the dual-shape branch from finding 2 is gone — OpenAI returns
+one shape (`b64_json`).
 
-Cost at the default: `lucid-origin` is $0.007 per 512×512 tile, so roughly $0.03 for a 1024×1024 image. `stable-diffusion-xl-lightning` and `stable-diffusion-xl-base-1.0` both price at $0/step if cost ever matters more than quality.
+The FLUX.2 family (`flux-2-dev`, `flux-2-klein-*`) needs a `multipart` request body rather than
+`{"prompt": ...}`, so it was never reachable through this code path.
+
+### 4.5 Cost, for the record
+
+Roughly 65 images/month (3 brands × ~5 posts/week):
+
+| Option | per 1024×1024 | per month |
+|---|---|---|
+| OpenAI `gpt-image-2`, low | ~$0.02 | ~$1.30 |
+| **OpenAI `gpt-image-2`, medium** — chosen | ~$0.07 | ~$4.50 |
+| OpenAI `gpt-image-2`, high | ~$0.19 | ~$12 |
+| CF `lucid-origin` | ~$0.03 | ~$2 |
+| CF SDXL variants | $0/step listed | ~free, but burns neurons |
+
+The spread is a few dollars, so cost is noise at this volume and should not drive the decision.
+Medium quality is the choice; escalate `IMAGE_QUALITY` to `high` per-brand only if medium visibly
+underserves a persona's imagery. Moving images off Workers AI may also keep text generation inside
+Cloudflare's free daily allocation, which roughly cancels the OpenAI spend.
 - Treats the post body as untrusted input to the image prompt, consistent with how [generator.ts](../../../apps/worker/src/lib/generator.ts) already treats topic content.
 
 Failure to generate an image is **non-fatal**: the draft is still written, with the error recorded. Text posting must never be blocked by an image service.
@@ -183,9 +224,18 @@ Failure to generate an image is **non-fatal**: the draft is still written, with 
 |---|---|---|
 | drop `profile_dir` | `accounts` | no per-account profiles exist any more |
 | add `image_style` (text) | `personas` | empty = no images for this persona |
-| add `IMAGE_MODEL` | `env` seed | |
-| add `CF_ACCOUNT_ID`, `CF_API_TOKEN` | `env` seed | replaces `ANTHROPIC_API_KEY` usage |
+| add `CF_ACCOUNT_ID`, `CF_API_TOKEN` | `env` seed | Workers AI, **text only** |
+| add `OPENAI_API_KEY` | `env` seed | images only |
+| add `IMAGE_MODEL`, `IMAGE_QUALITY`, `IMAGE_SIZE` | `env` seed | `gpt-image-2` / `medium` / `1024x1024` |
 | retire `PROFILES_DIR` | `env` | |
+
+Two migrations, both verified by running `up` / `down` / `up` against a scratch database:
+`1783372200_cf_images_schema.js` (schema + Workers AI env) and `1783372300_openai_images.js`
+(repoints images at OpenAI).
+
+**`LLM_BASE_URL` is not seeded with the Workers AI URL** because that URL embeds the account id.
+It still defaults to LM Studio, so setting `GEN_MODEL` to an `@cf/...` id without also setting
+`LLM_BASE_URL` sends a Cloudflare model id to a local LM Studio. Both must move together.
 
 `handle` (§193) is promoted from "display handle for reference" to load-bearing — it is now how a script identifies and verifies an account. It must be stored without the leading `@`, and the guard adds it.
 
@@ -210,9 +260,12 @@ Real Workers AI calls are **not** covered by tests and require `CF_ACCOUNT_ID` +
   were each verified separately by hand, and the chained path is covered only by unit tests.
 - The composer readback is whitespace-tolerant because only a **single-line** post was verified
   live. Multi-line posting is untested against the real editor.
-- Workers AI **image** generation is verified live (§4.4). Workers AI **text** generation reached the
-  model dispatch layer with the correct base URL, auth and model id — it failed on the neuron quota
-  (§3.1), not on configuration — but no completion has been read back yet. Retry after the daily
-  reset (00:00 UTC) or on Workers Paid.
+- **OpenAI image generation is entirely unverified against the live API** — there is no key yet, so
+  it is covered by mocked unit tests only. The request shape, `gpt-image-2` model id, `quality`
+  values and `data[0].b64_json` response field come from OpenAI's current API docs, not a live call.
+  First real call also needs API Organization Verification to be complete.
+- Workers AI **text** generation reached the model dispatch layer with the correct base URL, auth and
+  model id — it failed on the neuron quota (§3.1), not on configuration — but no completion has been
+  read back yet. Retry after the daily reset (00:00 UTC).
 - `playwright` remains a dependency: `linkedin.ts` still imports its `Page` type and is left in
   place unported. It can be dropped once LinkedIn is ported or the file is deleted.
