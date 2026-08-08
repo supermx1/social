@@ -66,6 +66,11 @@ export type AccountRecord = Base & {
 	persona: string;
 	platform: Platform;
 	handle: string;
+	/**
+	 * LinkedIn only: which identity to post as. A numeric company page id posts as that page;
+	 * empty posts as the personal profile. Ignored by every other platform.
+	 */
+	company_id: string;
 	session_status: SessionStatus;
 	last_verified_at: string;
 	last_warmed_at: string;

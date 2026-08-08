@@ -73,6 +73,7 @@
 				persona: personaId,
 				platform,
 				handle: textValue(fd, 'handle'),
+				company_id: textValue(fd, 'companyId'),
 				timezone: textValue(fd, 'timezone', 'Europe/London'),
 				posting_window_start: textValue(fd, 'postingWindowStart', '09:00'),
 				posting_window_end: textValue(fd, 'postingWindowEnd', '17:00'),
@@ -95,6 +96,7 @@
 		try {
 			await pb.collection('accounts').update(textValue(fd, 'id'), {
 				handle: textValue(fd, 'handle'),
+				company_id: textValue(fd, 'companyId'),
 				timezone: textValue(fd, 'timezone'),
 				posting_window_start: textValue(fd, 'postingWindowStart'),
 				posting_window_end: textValue(fd, 'postingWindowEnd'),
@@ -259,6 +261,23 @@
 						</div>
 					</div>
 
+					{#if editing.platform === 'linkedin'}
+						<div class="grid gap-1.5">
+							<Label for="companyId">
+								LinkedIn company page ID
+								<span class="font-normal text-muted-foreground">
+									(leave empty to post as your personal profile)
+								</span>
+							</Label>
+							<Input id="companyId" name="companyId" inputmode="numeric" placeholder="107591805" value={editing.companyId} />
+							<p class="text-xs font-medium text-muted-foreground">
+								The digits in your page's admin URL — linkedin.com/company/<strong>107591805</strong>/admin/.
+								Handle must be the page's display name exactly as LinkedIn shows it, e.g. “Kasa” — that is what
+								the guard checks the composer against before posting.
+							</p>
+						</div>
+					{/if}
+
 					<div class="grid gap-4 sm:grid-cols-2">
 						<div class="grid gap-1.5">
 							<Label for="postingWindowStart">Window start</Label>
@@ -326,14 +345,31 @@
 
 					<div class="grid gap-4 sm:grid-cols-2">
 						<div class="grid gap-1.5">
-							<Label for="handle">Handle</Label>
-							<Input id="handle" name="handle" placeholder="@handle" />
+							<Label for="newHandle">Handle</Label>
+							<Input id="newHandle" name="handle" placeholder={platformValue === 'linkedin' ? 'Kasa' : '@handle'} />
 						</div>
 						<div class="grid gap-1.5">
-							<Label for="timezone">Timezone</Label>
-							<Input id="timezone" name="timezone" value="Europe/London" />
+							<Label for="newTimezone">Timezone</Label>
+							<Input id="newTimezone" name="timezone" value="Europe/London" />
 						</div>
 					</div>
+
+					{#if platformValue === 'linkedin'}
+						<div class="grid gap-1.5">
+							<Label for="newCompanyId">
+								LinkedIn company page ID
+								<span class="font-normal text-muted-foreground">
+									(leave empty to post as your personal profile)
+								</span>
+							</Label>
+							<Input id="newCompanyId" name="companyId" inputmode="numeric" placeholder="107591805" />
+							<p class="text-xs font-medium text-muted-foreground">
+								The digits in your page's admin URL — linkedin.com/company/<strong>107591805</strong>/admin/.
+								Handle must be the page's display name exactly as LinkedIn shows it, e.g. “Kasa” — that is what
+								the guard checks the composer against before posting.
+							</p>
+						</div>
+					{/if}
 
 					<div class="grid gap-4 sm:grid-cols-2">
 						<div class="grid gap-1.5">

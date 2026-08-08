@@ -17,6 +17,7 @@ export const load = async () => {
 			platform: a.platform,
 			sessionStatus: a.session_status,
 			handle: a.handle,
+			companyId: a.company_id ?? '',
 			timezone: a.timezone,
 			postingWindowStart: a.posting_window_start,
 			postingWindowEnd: a.posting_window_end,

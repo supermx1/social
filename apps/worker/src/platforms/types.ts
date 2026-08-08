@@ -1,24 +1,4 @@
-import type { Page } from 'playwright';
 import type { AccountRecord, PostRecord } from '../types';
-
-/**
- * Playwright-era shape, unchanged from before this migration. Kept under its original name
- * so `linkedin.ts` — untouched, pending its own recon run before it's safe to wire up
- * (design doc §2.6) — still type-checks exactly as it did. Do not build new platforms
- * against this; see `EgoPlatformModule` below, which is what `x.ts` implements.
- *
- * ponytail: a union of this with EgoPlatformModule under the `PlatformModule` name was
- * tried and reverted — TypeScript won't distribute contextual parameter types across a
- * union for object-literal methods, so linkedin.ts's untouched `compose(page, post)` came
- * back as implicit-`any` under strict mode. Two separate named types avoids that entirely.
- */
-export type PlatformModule = {
-	platform: string;
-	loginUrl: string;
-	checkSession(page: Page): Promise<boolean>;
-	warm(page: Page): Promise<void>;
-	compose(page: Page, post: PostRecord): Promise<{ postUrl?: string; confirmed?: boolean }>;
-};
 
 /** One page read's worth of session status for every account on a platform (design §2.4). */
 export type SessionStatusResult = {
@@ -65,8 +45,17 @@ export function normalizeHandle(handle: string): string {
 	return handle.trim().replace(/^@+/, '');
 }
 
-/** True when `handle` (with or without a leading '@') has a live session. */
+/**
+ * True when `handle` has a live session.
+ *
+ * Both sides are normalised rather than assuming X's '@' prefix: X reports handles as
+ * '@TheAvgTechDad' while LinkedIn reports display names like 'Kasa' and
+ * 'TechGFX Technologies Limited'. Comparing case-insensitively on the bare name works for both,
+ * where building `'@' + handle` only ever worked for X.
+ */
 export function sessionHasHandle(session: SessionStatusResult, handle: string): boolean {
-	const wanted = `@${normalizeHandle(handle)}`;
-	return session.activeHandle === wanted || session.otherHandles.includes(wanted);
+	const wanted = normalizeHandle(handle).toLowerCase();
+	return [session.activeHandle, ...session.otherHandles]
+		.filter((h): h is string => Boolean(h))
+		.some((h) => normalizeHandle(h).toLowerCase() === wanted);
 }
