@@ -93,11 +93,34 @@ export function parseDraftArray(value: string) {
 	return parsed;
 }
 
-const llmBase = () => (config.LLM_BASE_URL || 'http://127.0.0.1:1234/v1').replace(/\/$/, '');
+/**
+ * Where chat completions go. An explicit `LLM_BASE_URL` always wins — that is the escape hatch for
+ * LM Studio or any other OpenAI-compatible server. Otherwise it is derived from `CF_ACCOUNT_ID`,
+ * so running on Workers AI takes one configured value instead of two that have to agree (a blank
+ * `LLM_BASE_URL` used to silently fall back to LM Studio, which meant a Cloudflare model id could
+ * be sent to a local server that wasn't running). Deriving it also keeps the account id out of the
+ * migration seed, and therefore out of git.
+ */
+const llmBase = () => {
+	if (config.LLM_BASE_URL) return config.LLM_BASE_URL.replace(/\/$/, '');
+	if (config.CF_ACCOUNT_ID) {
+		return `https://api.cloudflare.com/client/v4/accounts/${config.CF_ACCOUNT_ID}/ai/v1`;
+	}
+	throw new Error(
+		'No LLM endpoint configured. Set CF_ACCOUNT_ID for Workers AI, or LLM_BASE_URL for any other OpenAI-compatible server, in the env collection.',
+	);
+};
 
-/** Set LLM_API_KEY in the env collection for hosted providers (Groq, etc.); local servers don't need it. */
-const authHeaders = (): Record<string, string> =>
-	config.LLM_API_KEY ? { authorization: `Bearer ${config.LLM_API_KEY}` } : {};
+/**
+ * `LLM_API_KEY` for a third-party OpenAI-compatible provider, falling back to `CF_API_TOKEN` when
+ * we're on Workers AI. The fallback matters: `LLM_API_KEY` is not seeded by any migration, so
+ * without it a Workers AI request would go out with no Authorization header at all and 401.
+ * Local servers (LM Studio) need neither, hence the empty-headers case.
+ */
+const authHeaders = (): Record<string, string> => {
+	const key = config.LLM_API_KEY || config.CF_API_TOKEN;
+	return key ? { authorization: `Bearer ${key}` } : {};
+};
 
 /**
  * GEN_MODEL from the env collection. Mandatory: Cloudflare Workers AI has no documented
