@@ -24,6 +24,7 @@ function fakePersona(overrides: Partial<PersonaRecord> = {}): PersonaRecord {
 		default_hashtags: [],
 		active: true,
 		image_style: 'warm, hand-drawn illustration, earthy palette',
+		brand_colors: '',
 		...overrides,
 	} as PersonaRecord;
 }
@@ -94,6 +95,43 @@ describe('generateImage', () => {
 		config.IMAGE_SIZE = '1536x1024';
 		await generateImage({ persona: fakePersona(), body: 'hello' });
 		expect(calls[1]).toMatchObject({ quality: 'high', size: '1536x1024' });
+	});
+
+	// Kasa's imagery came back with no brand colour because the palette was buried in the
+	// image_style prose. Hex values are now stated separately, first, as a hard constraint.
+	it('states brand colours before the style, as an explicit constraint', async () => {
+		let sentPrompt = '';
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: string, opts: RequestInit) => {
+				sentPrompt = JSON.parse(String(opts.body)).prompt;
+				return imageResponse(PNG);
+			}),
+		);
+
+		await generateImage({
+			persona: fakePersona({ brand_colors: '#7C5CFF primary, #2A1F60 dark' }),
+			body: 'hello',
+		});
+
+		expect(sentPrompt).toContain('#7C5CFF primary, #2A1F60 dark');
+		expect(sentPrompt.indexOf('#7C5CFF')).toBeLessThan(sentPrompt.indexOf('Visual style'));
+	});
+
+	it('omits the palette clause entirely when the persona has no brand colours', async () => {
+		let sentPrompt = '';
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: string, opts: RequestInit) => {
+				sentPrompt = JSON.parse(String(opts.body)).prompt;
+				return imageResponse(PNG);
+			}),
+		);
+
+		await generateImage({ persona: fakePersona({ brand_colors: '' }), body: 'hello' });
+
+		expect(sentPrompt).not.toContain('Brand palette');
+		expect(sentPrompt.startsWith('Visual style')).toBe(true);
 	});
 
 	it('treats the post body as untrusted reference text, not an instruction', async () => {

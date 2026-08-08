@@ -95,6 +95,8 @@ export type PersonaRecord = Base & {
 	example_posts: string[];
 	links: Link[];
 	default_hashtags: string[];
+	/** Brand palette as hex values, fed to image generation verbatim. Empty = unconstrained. */
+	brand_colors: string;
 	active: boolean;
 };
 
