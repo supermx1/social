@@ -558,7 +558,7 @@ TOPIC_INBOX_TTL_DAYS=7
 The only file-based secrets are the worker's bootstrap credentials (it must authenticate before it can read `env`), in `apps/worker/.env`:
 
 ```
-PB_URL=http://127.0.0.1:8090
+PB_URL=http://127.0.0.1:8095
 PB_SUPERUSER_EMAIL=
 PB_SUPERUSER_PASSWORD=
 ```

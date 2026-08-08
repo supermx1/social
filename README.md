@@ -29,7 +29,7 @@ backend/backend migrate
 npm run build
 
 # 3. Start PocketBase (serves UI + API, runs scheduler/crons)
-npm run backend            # http://127.0.0.1:8090  (dashboard at /_/)
+npm run backend            # http://127.0.0.1:8095  (dashboard at /_/)
 
 # 4. In another shell, start the worker
 cp apps/worker/.env.example apps/worker/.env   # fill PB_SUPERUSER_* + PB_URL
@@ -98,8 +98,8 @@ source to watch. Here's the pipeline once a feed is `active`:
 ## Dev
 
 ```sh
-npm run backend            # PocketBase (API on :8090)
-npm run dev                # Vite dev server for the SPA (proxies to :8090)
+npm run backend            # PocketBase (API on :8095)
+npm run dev                # Vite dev server for the SPA (proxies to :8095)
 npm run worker             # job runner
 npm run check && npm test
 ```

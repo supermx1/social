@@ -7,7 +7,7 @@ try {
 	// no .env — rely on the process environment
 }
 
-export const pb = new PocketBase(process.env.PB_URL ?? 'http://127.0.0.1:8090');
+export const pb = new PocketBase(process.env.PB_URL ?? 'http://127.0.0.1:8095');
 pb.autoCancellation(false);
 
 export async function authSuperuser() {

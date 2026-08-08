@@ -8,7 +8,7 @@
     "apps/worker"
   ],
   "scripts": {
-    "backend": "backend/backend serve --http=127.0.0.1:8090",
+    "backend": "backend/backend serve --http=127.0.0.1:8095",
     "dev": "npm run dev -w apps/web",
     "worker": "npm run dev -w apps/worker",
     "build": "npm run build -w apps/web",
