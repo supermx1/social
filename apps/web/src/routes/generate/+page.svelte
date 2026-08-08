@@ -2,12 +2,13 @@
 	import { invalidateAll } from '$app/navigation';
 	import { pb } from '$lib/pb';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
-	import { textValue, numberValue } from '$lib/forms';
+	import { textValue, numberValue, boolValue } from '$lib/forms';
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Switch } from '$lib/components/ui/switch';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardHeader, CardTitle, CardContent } from '$lib/components/ui/card';
 	import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '$lib/components/ui/select';
@@ -31,7 +32,8 @@
 					personaId: textValue(fd, 'personaId'),
 					platform: textValue(fd, 'platform'),
 					pillar: textValue(fd, 'pillar'),
-					n: numberValue(fd, 'n', 3)
+					n: numberValue(fd, 'n', 3),
+					withImages: boolValue(fd, 'withImages')
 				},
 				status: 'queued',
 				attempts: 0
@@ -103,6 +105,14 @@
 				<Label for="n">Variants</Label>
 				<Input id="n" name="n" type="number" min="1" max="5" value="3" />
 			</div>
+
+			<label class="flex items-center gap-2 sm:col-span-2">
+				<Switch name="withImages" />
+				<span class="text-sm font-bold">With images</span>
+				<span class="text-sm font-normal text-muted-foreground">
+					(generates one image per draft; personas with no image style set get none)
+				</span>
+			</label>
 
 			<div class="sm:col-span-2">
 				<Button type="submit">Queue generation job</Button>

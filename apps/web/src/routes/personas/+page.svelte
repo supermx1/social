@@ -57,6 +57,7 @@
 			mission: textValue(fd, 'mission'),
 			audience: textValue(fd, 'audience'),
 			voice_tone: textValue(fd, 'voiceTone'),
+			image_style: textValue(fd, 'imageStyle'),
 			guardrails: textValue(fd, 'guardrails'),
 			content_pillars: listValue(fd, 'contentPillars'),
 			domain_keywords: listValue(fd, 'domainKeywords'),
@@ -223,6 +224,10 @@
 				<div class="grid gap-1.5">
 					<Label for="voiceTone">Voice tone</Label>
 					<Textarea id="voiceTone" name="voiceTone" value={editing?.voiceTone ?? ''} />
+				</div>
+				<div class="grid gap-1.5">
+					<Label for="imageStyle">Image style <span class="font-normal text-muted-foreground">(drives this brand's generated imagery — leave empty for no images)</span></Label>
+					<Textarea id="imageStyle" name="imageStyle" value={editing?.imageStyle ?? ''} />
 				</div>
 				<div class="grid gap-1.5">
 					<Label for="guardrails">Guardrails</Label>

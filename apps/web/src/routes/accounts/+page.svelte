@@ -2,7 +2,6 @@
 	import { invalidateAll } from '$app/navigation';
 	import { pb } from '$lib/pb';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
-	import { allocateProfileDir } from '$lib/profile-dir';
 	import { textValue, numberValue, boolValue } from '$lib/forms';
 	import { statusVariant } from '$lib/status';
 	import { onMount } from 'svelte';
@@ -69,7 +68,6 @@
 		const fd = new FormData(form);
 		const personaId = textValue(fd, 'personaId');
 		const platform = textValue(fd, 'platform');
-		const persona = data.personas.find((p) => p.id === personaId);
 		try {
 			await pb.collection('accounts').create({
 				persona: personaId,
@@ -80,7 +78,6 @@
 				posting_window_end: textValue(fd, 'postingWindowEnd', '17:00'),
 				max_posts_per_day: numberValue(fd, 'maxPostsPerDay', 2),
 				min_gap_minutes: numberValue(fd, 'minGapMinutes', 120),
-				profile_dir: allocateProfileDir('./data/profiles', persona?.slug ?? personaId, platform),
 				session_status: 'unknown',
 				active: true
 			});
@@ -147,7 +144,7 @@
 	}
 </script>
 
-<PageHeader title="Accounts" description="One persistent browser profile per platform — no stored credentials.">
+<PageHeader title="Accounts" description="One account per persona and platform, posted via the shared ego-browser session — no stored credentials.">
 	{#snippet actions()}
 		<Button onclick={openCreate}>
 			<PlusIcon class="size-4" />
@@ -247,7 +244,7 @@
 					<DialogHeader>
 						<DialogTitle>Edit {editing.personaName} rules</DialogTitle>
 						<DialogDescription>
-							{editing.personaName} · {editing.platform} · {editing.profileDir}
+							{editing.personaName} · {editing.platform}
 						</DialogDescription>
 					</DialogHeader>
 
@@ -298,7 +295,7 @@
 					<DialogHeader>
 						<DialogTitle>New account</DialogTitle>
 						<DialogDescription>
-							Creates a dedicated browser profile for this persona and platform.
+							Adds an account to post as, for this persona and platform.
 						</DialogDescription>
 					</DialogHeader>
 

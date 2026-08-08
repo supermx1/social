@@ -15,7 +15,6 @@ export const load = async () => {
 			personaName: a.expand?.persona?.name ?? '',
 			personaSlug: a.expand?.persona?.slug ?? '',
 			platform: a.platform,
-			profileDir: a.profile_dir,
 			sessionStatus: a.session_status,
 			handle: a.handle,
 			timezone: a.timezone,

@@ -15,6 +15,7 @@ export const load = async () => {
 			kind: p.kind,
 			status: p.status,
 			body: p.body,
+			media: p.media ?? [],
 			timingMode: p.timing_mode,
 			scheduledFor: p.scheduled_for,
 			randomWindowStart: p.random_window_start,

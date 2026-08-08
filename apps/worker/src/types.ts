@@ -33,6 +33,7 @@ export type JobType =
 	| 'login_start'
 	| 'login_confirm'
 	| 'generate'
+	| 'generate_image'
 	| 'post_now'
 	| 'warm'
 	| 'verify'
@@ -47,7 +48,7 @@ export type Link = { label: string; url: string };
 /** Type-specific args for a queued worker job (PRD §5.3 / §6.8). */
 export type JobPayload =
 	| { accountId: string } // login_start | login_confirm | warm | verify
-	| { postId: string } // post_now
+	| { postId: string } // post_now | generate_image — dispatch is on job.type, not payload shape
 	| { feedId: string } // feed_poll
 	| {
 			// generate
@@ -56,6 +57,7 @@ export type JobPayload =
 			n: number;
 			topicId?: string; // set for topical (Mode B); omit for evergreen (Mode A)
 			pillar?: string; // set for evergreen
+			withImages?: boolean; // generate one image per draft alongside the text (design doc §4.2)
 	  };
 
 type Base = { id: string; created: string; updated: string };
@@ -64,7 +66,6 @@ export type AccountRecord = Base & {
 	persona: string;
 	platform: Platform;
 	handle: string;
-	profile_dir: string;
 	session_status: SessionStatus;
 	last_verified_at: string;
 	last_warmed_at: string;
@@ -82,6 +83,7 @@ export type PersonaRecord = Base & {
 	mission: string;
 	audience: string;
 	voice_tone: string;
+	image_style: string;
 	guardrails: string;
 	content_pillars: string[];
 	domain_keywords: string[];

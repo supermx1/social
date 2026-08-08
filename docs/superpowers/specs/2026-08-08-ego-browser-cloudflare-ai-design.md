@@ -105,7 +105,23 @@ Authorization: Bearer <api_token>
 
 **That code change:** Cloudflare does not document `/v1/models`, and [generator.ts:105](../../../apps/worker/src/lib/generator.ts:105) currently falls back to probing it when `GEN_MODEL` is unset. `GEN_MODEL` becomes **mandatory** — an unset value raises a clear configuration error instead of a confusing 404 from a model-discovery call that will never work.
 
-Model: start at `glm-4.7-flash` (cheap, function calling, structured output), escalate to `gpt-oss-120b` if voice quality disappoints. Both list structured-output support, which is what the existing JSON-array prompt needs. Swapping is one env value, so a wrong first pick costs nothing.
+Model: start at `@cf/zai-org/glm-4.7-flash` (cheap, function calling, structured output), escalate to `@cf/openai/gpt-oss-120b` if voice quality disappoints. Swapping is one env value, so a wrong first pick costs nothing.
+
+**`GEN_MODEL` must be the fully-prefixed id.** Verified 2026-08-08: `glm-4.7-flash` returns *"No such model"*; `@cf/zai-org/glm-4.7-flash` is accepted. The `@cf/<author>/<model>` prefix is required, and the model catalogue is the only reliable source for the author segment.
+
+### 3.1 The free tier will not carry this — plan on Workers Paid
+
+Measured 2026-08-08, and it is a bigger constraint than expected. **Text and image generation share one daily neuron budget**, and images consume it fast: roughly a dozen image generations exhausted the entire 10,000-neuron daily free allocation, after which *every* Workers AI call — including text — returned:
+
+```
+HTTP 429  code 4006
+"you have used up your daily free allocation of 10,000 neurons"
+```
+
+Two consequences:
+
+1. **Images can starve text.** A batch generation run with `withImages` on can burn the day's budget and leave the system unable to write drafts at all. The failure is loud (the quota message is surfaced verbatim to the operator via `errorMessage`), but the coupling is real and is a reason to leave `withImages` off by default rather than on.
+2. **Workers Paid is effectively a prerequisite** for using images at any real cadence. This was not visible from the docs and only showed up under live use.
 
 Nothing else in the generator changes. Persona grounding, the untrusted-signal handling for topical posts, and the JSON contract all stay as they are.
 
@@ -133,7 +149,30 @@ New `apps/worker/src/lib/images.ts`:
 - Builds the prompt from `persona.image_style` + the post body.
 - POSTs to the Workers AI image model, writes the returned bytes to `MEDIA_DIR` under a UUID filename, returns the path.
 - `posts.media` already exists as `string[]` and stores paths, not bytes (§242) — no schema change needed there.
-- Model in `env` as `IMAGE_MODEL`, defaulting to a FLUX variant. Same account ID and token as text, so no new credentials.
+- Model in `env` as `IMAGE_MODEL`. Same account ID and token as text, so no new credentials.
+
+### 4.4 Model selection — measured, not assumed
+
+Tested against the live API on 2026-08-08 with identical benign prompts:
+
+| Model | Response shape | `content-type` | Actual bytes | Result |
+|---|---|---|---|---|
+| `@cf/leonardo/lucid-origin` | base64 in JSON | `application/json` | JPEG | 2/2 ok — **default** |
+| `@cf/leonardo/phoenix-1.0` | raw binary | `image/jpeg` | JPEG | 2/2 ok |
+| `@cf/stabilityai/stable-diffusion-xl-base-1.0` | raw binary | `image/png` | PNG | 2/2 ok |
+| `@cf/bytedance/stable-diffusion-xl-lightning` | raw binary | `image/png` | **JPEG** | 2/2 ok, header lies |
+| `@cf/black-forest-labs/flux-1-schnell` | base64 in JSON | `application/json` | JPEG | **1/4** — unusable |
+| `@cf/black-forest-labs/flux-2-*` | — | — | — | rejects JSON, needs `multipart` |
+
+Three findings that shaped the code:
+
+1. **`flux-1-schnell` is unusable here.** It rejected `"a plain blue circle on a white background, minimal, flat vector illustration"` as *"Input prompt contains NSFW content"* on three of four attempts. Every other model accepted the identical prompt. `IMAGE_MODEL` defaults to `@cf/leonardo/lucid-origin`.
+2. **Both response shapes are real**, so the dual branch is required, not defensive padding — Leonardo `lucid-origin` returns base64-in-JSON while `phoenix-1.0` and the SDXL models return raw bytes.
+3. **`content-type` cannot be trusted for the file extension.** `stable-diffusion-xl-lightning` reports `image/png` and returns JPEG bytes. The extension is therefore sniffed from magic bytes; the header only selects the parse branch. A `.png` file holding JPEG data would otherwise fail much later, at upload time, far from its cause.
+
+The FLUX.2 family (`flux-2-dev`, `flux-2-klein-*`) needs a `multipart` request body rather than `{"prompt": ...}`, so it is not reachable through this code path. Not worth supporting until there's a reason to prefer it.
+
+Cost at the default: `lucid-origin` is $0.007 per 512×512 tile, so roughly $0.03 for a 1024×1024 image. `stable-diffusion-xl-lightning` and `stable-diffusion-xl-base-1.0` both price at $0/step if cost ever matters more than quality.
 - Treats the post body as untrusted input to the image prompt, consistent with how [generator.ts](../../../apps/worker/src/lib/generator.ts) already treats topic content.
 
 Failure to generate an image is **non-fatal**: the draft is still written, with the error recorded. Text posting must never be blocked by an image service.
@@ -167,5 +206,13 @@ Real Workers AI calls are **not** covered by tests and require `CF_ACCOUNT_ID` +
 
 - LinkedIn, Instagram, TikTok, Threads unported — each needs its own recon run.
 - Media **upload** into X is unexercised; `input[data-testid="fileInput"]` was found present but never driven. First real image post needs watching.
-- Switch-then-post has never been chained in one job; switching and posting were each verified separately.
-- Workers AI text and image endpoints are unverified against the live API pending credentials.
+- Switch-then-post has never been chained in one job against the live site; switching and posting
+  were each verified separately by hand, and the chained path is covered only by unit tests.
+- The composer readback is whitespace-tolerant because only a **single-line** post was verified
+  live. Multi-line posting is untested against the real editor.
+- Workers AI **image** generation is verified live (§4.4). Workers AI **text** generation reached the
+  model dispatch layer with the correct base URL, auth and model id — it failed on the neuron quota
+  (§3.1), not on configuration — but no completion has been read back yet. Retry after the daily
+  reset (00:00 UTC) or on Workers Paid.
+- `playwright` remains a dependency: `linkedin.ts` still imports its `Page` type and is left in
+  place unported. It can be dropped once LinkedIn is ported or the file is deleted.

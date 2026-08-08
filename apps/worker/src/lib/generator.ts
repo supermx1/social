@@ -99,15 +99,16 @@ const llmBase = () => (config.LLM_BASE_URL || 'http://127.0.0.1:1234/v1').replac
 const authHeaders = (): Record<string, string> =>
 	config.LLM_API_KEY ? { authorization: `Bearer ${config.LLM_API_KEY}` } : {};
 
-/** GEN_MODEL from the env collection, or whatever model LM Studio has loaded. */
+/**
+ * GEN_MODEL from the env collection. Mandatory: Cloudflare Workers AI has no documented
+ * model-discovery endpoint (unlike LM Studio's `/v1/models`), so there is nothing to fall back
+ * to probing. An unset value is a configuration error, not a discovery opportunity.
+ */
 export async function resolveModel() {
-	if (config.GEN_MODEL) return config.GEN_MODEL;
-	const res = await fetch(`${llmBase()}/models`, { headers: authHeaders() });
-	if (!res.ok) throw new Error(`LLM server not reachable at ${llmBase()} (${res.status}). Is LM Studio running?`);
-	const body = (await res.json()) as { data?: { id: string }[] };
-	const id = body.data?.[0]?.id;
-	if (!id) throw new Error('LLM server has no model loaded. Load one in LM Studio or set GEN_MODEL.');
-	return id;
+	if (!config.GEN_MODEL) {
+		throw new Error('GEN_MODEL is not set. Add GEN_MODEL to the env collection (e.g. a Workers AI model id).');
+	}
+	return config.GEN_MODEL;
 }
 
 // ponytail: reasoning models (e.g. ornith-1.0-9b) spend most of this budget on hidden

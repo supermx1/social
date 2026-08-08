@@ -26,7 +26,11 @@ await mkdir(outputDir, { recursive: true });
 
 chromium.use(stealth());
 
-const context = await chromium.launchPersistentContext(account.profile_dir, {
+// ponytail: accounts.profile_dir was dropped (no more per-account Playwright profiles — publishing
+// moved to ego-browser, design doc §1-2). This standalone recon tool still needs *a* persistent
+// context dir; a fresh one scoped to this recording run is fine, it doesn't need to be stable.
+const profileDir = `${outputDir}/profile`;
+const context = await chromium.launchPersistentContext(profileDir, {
 	headless: false,
 	recordVideo: { dir: outputDir, size: { width: 1280, height: 720 } },
 	viewport: { width: 1280, height: 720 },
@@ -43,7 +47,7 @@ const startUrl =
 	overrideUrl ?? (account.platform === 'x' ? 'https://x.com/compose/post' : 'https://www.linkedin.com/feed/');
 
 console.log(`Recording ${account.platform} account ${account.id}`);
-console.log(`Profile dir: ${account.profile_dir}`);
+console.log(`Profile dir: ${profileDir}`);
 console.log(`Output dir: ${outputDir}`);
 console.log('Make a normal manual post in the browser window, then close the browser window.');
 console.log('Note: Playwright traces may contain page content from the recorded session. Keep them local.');

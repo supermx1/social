@@ -3,11 +3,63 @@ import { alertTelegram } from './alerts';
 import { composePost, loginStart, verifySession, warmSession } from './browser';
 import { generateDrafts } from './generator';
 import { pollFeed } from './feeds';
+import { generateImage, NoImageStyleError } from './images';
 import { claimNextJob, completeJob, failJob } from './jobs';
-import type { AccountRecord, JobRecord, PostRecord } from '../types';
+import type { PBLike } from './jobs';
+import type { AccountRecord, JobRecord, PersonaRecord, Platform, PostRecord } from '../types';
 
 function getAccount(id: string) {
 	return pb.collection('accounts').getOne<AccountRecord>(id);
+}
+
+/**
+ * Generates (or regenerates) one post's image and writes the path to posts.media.
+ * Non-fatal by design (design doc §4.3): a genuine failure is recorded on the post's
+ * error_message so the operator sees it in the Queue, but never thrown — the caller (a
+ * text-draft job or the dedicated generate_image job) must not fail because of this.
+ * An empty persona.image_style (NoImageStyleError) is the documented "no images for this
+ * persona" outcome, not a failure, so it is swallowed silently.
+ */
+export async function draftImage(post: PostRecord, persona: PersonaRecord, client: PBLike = pb) {
+	try {
+		const path = await generateImage({ persona, body: post.body });
+		await client.collection('posts').update(post.id, { media: [path] });
+	} catch (error) {
+		if (error instanceof NoImageStyleError) return;
+		await client.collection('posts').update(post.id, {
+			error_message: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+/**
+ * Attaches one generated image to each draft just created by generateDrafts for this payload.
+ * ponytail: lib/generator.ts (owned elsewhere) doesn't return the posts it creates, so the newest
+ * `n` drafts for the resolved account are re-queried rather than threading a return value through
+ * a module this task doesn't touch.
+ */
+export async function attachImages(
+	payload: { personaId: string; platform: Platform; n: number },
+	client: PBLike = pb,
+) {
+	// ponytail: client is typed via PBLike (collection(): any) so tests can pass a plain fake —
+	// generic type args don't type-check against an `any`-returning call, so annotate instead.
+	const persona: PersonaRecord = await client.collection('personas').getOne(payload.personaId);
+	const account: AccountRecord = await client
+		.collection('accounts')
+		.getFirstListItem(
+			pb.filter('persona = {:persona} && platform = {:platform} && active = true', {
+				persona: payload.personaId,
+				platform: payload.platform,
+			}),
+		);
+	const { items }: { items: PostRecord[] } = await client.collection('posts').getList(1, payload.n, {
+		filter: pb.filter('account = {:account} && status = "draft"', { account: account.id }),
+		sort: '-created',
+	});
+	for (const post of items) {
+		await draftImage(post, persona, client);
+	}
 }
 
 export function hasPublishEvidence(result: { postUrl?: string; confirmed?: boolean }) {
@@ -91,12 +143,21 @@ async function executeJob(job: JobRecord) {
 		case 'generate':
 			if (!('personaId' in payload)) throw new Error('generate payload missing personaId');
 			await generateDrafts(payload);
+			if (payload.withImages) await attachImages(payload);
 			break;
 		case 'post_now': {
 			if (!('postId' in payload)) throw new Error('postId missing');
 			const post = await pb.collection('posts').getOne<PostRecord>(payload.postId);
 			const account = await getAccount(post.account);
 			await publishPost(post, account);
+			break;
+		}
+		case 'generate_image': {
+			if (!('postId' in payload)) throw new Error('postId missing');
+			const post = await pb.collection('posts').getOne<PostRecord>(payload.postId);
+			const account = await getAccount(post.account);
+			const persona = await pb.collection('personas').getOne<PersonaRecord>(account.persona);
+			await draftImage(post, persona);
 			break;
 		}
 		case 'feed_poll':

@@ -34,6 +34,8 @@
 	import SendIcon from '@lucide/svelte/icons/send';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import TrashIcon from '@lucide/svelte/icons/trash-2';
+	import ImageIcon from '@lucide/svelte/icons/image';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 
 	let { data } = $props();
 	type PostRow = (typeof data.posts)[number];
@@ -112,6 +114,13 @@
 	const postNow = (id: string) =>
 		run(() =>
 			pb.collection('jobs').create({ type: 'post_now', payload: { postId: id }, status: 'queued', attempts: 0 })
+		);
+
+	const regenerateImage = (id: string) =>
+		run(() =>
+			pb
+				.collection('jobs')
+				.create({ type: 'generate_image', payload: { postId: id }, status: 'queued', attempts: 0 })
 		);
 
 	function formatDate(iso: string | null | undefined) {
@@ -238,6 +247,10 @@
 												Post now
 											</DropdownMenuItem>
 										{/if}
+										<DropdownMenuItem onclick={() => regenerateImage(post.id)}>
+											<RefreshCwIcon class="size-4" />
+											Regenerate image
+										</DropdownMenuItem>
 										<DropdownMenuSeparator />
 										<DropdownMenuItem variant="destructive" onclick={() => remove(post.id)}>
 											<TrashIcon class="size-4" />
@@ -269,6 +282,26 @@
 				<div class="grid gap-1.5">
 					<Label for="body">Body</Label>
 					<Textarea id="body" bind:value={editBody} rows={6} />
+				</div>
+
+				<div class="grid gap-1.5">
+					<Label>Image</Label>
+					{#if editing?.media?.length}
+						<ul class="grid gap-1 text-xs font-medium text-muted-foreground">
+							{#each editing.media as path (path)}
+								<li class="flex items-center gap-1.5 truncate">
+									<ImageIcon class="size-3.5 shrink-0" />
+									{path}
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="text-xs font-medium text-muted-foreground">No image for this post.</p>
+					{/if}
+					<Button type="button" variant="outline" size="sm" onclick={() => editing && regenerateImage(editing.id)}>
+						<RefreshCwIcon class="size-4" />
+						Regenerate image
+					</Button>
 				</div>
 
 				<div class="grid gap-1.5">

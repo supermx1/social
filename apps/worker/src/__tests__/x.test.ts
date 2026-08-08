@@ -1,153 +1,184 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright';
-import {
-	typeXPostBody,
-	waitForXPostSubmitted,
-	X_POST_BUTTON_SELECTOR,
-	xTypingTimeoutMs,
-} from '../platforms/x';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import type { AccountRecord, PostRecord } from '../types';
+import type { MinimalDocument, MinimalElement } from '../platforms/x';
 
-describe('X composer helpers', () => {
-	let browser: Browser;
+const runEgo = vi.fn<(script: string) => Promise<string[]>>();
 
-	beforeAll(async () => {
-		browser = await chromium.launch({ headless: true });
+vi.mock('../lib/ego', () => ({
+	runEgo: (...args: [string]) => runEgo(...args),
+	ensureBrowser: vi.fn(async () => {}),
+}));
+
+const { xPlatform, readXSessionInPage } = await import('../platforms/x');
+
+function line(value: unknown): string[] {
+	return [JSON.stringify(value)];
+}
+
+const account = { id: 'acc1', handle: 'TheAvgTechDad', platform: 'x' } as unknown as AccountRecord;
+const post = { id: 'post1', body: 'hello from the guard test' } as unknown as PostRecord;
+
+describe('X compose — the account guard (design doc §2.3)', () => {
+	beforeEach(() => {
+		runEgo.mockReset();
 	});
 
-	afterAll(async () => {
-		await browser.close();
+	it('throws before any compose or click when the target handle has no live session at all', async () => {
+		runEgo.mockResolvedValueOnce(line({ activeHandle: '@someoneElse', otherHandles: [] }));
+
+		await expect(xPlatform.compose(account, post)).rejects.toThrow(/no live session/);
+		expect(runEgo).toHaveBeenCalledTimes(1); // session read only — never the type/click scripts
 	});
 
-	it('targets only visible enabled Post buttons', async () => {
-		const page = await browser.newPage();
-		try {
-			await page.setContent(`
-				<button data-testid="tweetButton" disabled>Post</button>
-				<button data-testid="tweetButton" style="display:none">Post</button>
-				<button data-testid="tweetButton">Post</button>
-			`);
+	it('throws before any compose or click when a switch is attempted but never lands', async () => {
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@someoneElse', otherHandles: ['@TheAvgTechDad'] }))
+			.mockResolvedValueOnce(line({ activeHandle: '@stillWrong', otherHandles: [] }));
 
-			await expect(page.locator(X_POST_BUTTON_SELECTOR).count()).resolves.toBe(1);
-			await expect(page.locator(X_POST_BUTTON_SELECTOR).first().isEnabled()).resolves.toBe(true);
-		} finally {
-			await page.close();
-		}
+		await expect(xPlatform.compose(account, post)).rejects.toThrow(/failed to switch/i);
+		expect(runEgo).toHaveBeenCalledTimes(2); // session read + switch attempt — no type/click
 	});
 
-	it('types into the visible editor after an audience menu has been opened', async () => {
-		const page = await browser.newPage();
-		try {
-			await page.setContent(`
-				<div role="menu">Choose audience</div>
-				<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true"></div>
-			`);
+	it('throws immediately before the click when the handle drifts after typing', async () => {
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] }))
+			.mockResolvedValueOnce(line({ activeHandle: '@drifted', editorText: post.body }));
 
-			await typeXPostBody(page, 'hello from x', 0);
-
-			await expect(page.locator('[data-testid="tweetTextarea_0"]').innerText()).resolves.toBe(
-				'hello from x',
-			);
-		} finally {
-			await page.close();
-		}
+		await expect(xPlatform.compose(account, post)).rejects.toThrow(/wrong x account immediately before posting/i);
+		expect(runEgo).toHaveBeenCalledTimes(2); // session read + type — click script never runs
 	});
 
-	it('clicks the X editor before typing so Draft receives the text', async () => {
-		const page = await browser.newPage();
-		try {
-			await page.setContent(`
-				<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true" tabindex="0"></div>
-				<script>
-					const editor = document.querySelector('[data-testid="tweetTextarea_0"]');
-					editor.addEventListener('focus', () => {
-						if (!editor.dataset.clicked) editor.blur();
-					});
-					editor.addEventListener('click', () => {
-						editor.dataset.clicked = 'true';
-						editor.focus();
-					});
-				</script>
-			`);
-
-			await typeXPostBody(page, 'hello from x', 0);
-
-			await expect(page.locator('[data-testid="tweetTextarea_0"]').innerText()).resolves.toBe(
-				'hello from x',
-			);
-			await expect(
-				page.locator('[data-testid="tweetTextarea_0"]').getAttribute('data-clicked'),
-			).resolves.toBe('true');
-		} finally {
-			await page.close();
-		}
-	});
-
-	it('confirms X posts from the CreateTweet response even when the page stays on home', async () => {
-		const page = await browser.newPage();
-		try {
-			await page.route('https://x.com/i/api/graphql/*/CreateTweet', async (route) => {
-				await route.fulfill({
-					status: 200,
-					contentType: 'application/json',
-					headers: { 'access-control-allow-origin': '*' },
-					body: JSON.stringify({
-						data: {
-							create_tweet: {
-								tweet_results: {
-									result: {
-										rest_id: '12345',
-										core: {
-											user_results: {
-												result: { core: { screen_name: 'kasa_africa' } },
-											},
-										},
-									},
-								},
-							},
-						},
-					}),
-				});
-			});
-
-			const submitted = waitForXPostSubmitted(page, 1000);
-			await page.evaluate(() =>
-				fetch('https://x.com/i/api/graphql/test/CreateTweet', { method: 'POST' }),
+	it('throws when the toast permalink names a different account than the one we posted as', async () => {
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] }))
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', editorText: post.body }))
+			.mockResolvedValueOnce(
+				line({ text: 'Your post was sent. | View', href: 'https://x.com/wrongHandle/status/999' }),
 			);
 
-			await expect(submitted).resolves.toEqual({
-				confirmed: true,
-				postUrl: 'https://x.com/kasa_africa/status/12345',
-			});
-		} finally {
-			await page.close();
-		}
+		await expect(xPlatform.compose(account, post)).rejects.toThrow(/posted under the wrong account/i);
+		expect(runEgo).toHaveBeenCalledTimes(3);
 	});
 
-	it('does not confirm X posts when CreateTweet returns GraphQL errors', async () => {
-		const page = await browser.newPage();
-		try {
-			await page.route('https://x.com/i/api/graphql/*/CreateTweet', async (route) => {
-				await route.fulfill({
-					status: 200,
-					contentType: 'application/json',
-					headers: { 'access-control-allow-origin': '*' },
-					body: JSON.stringify({ errors: [{ message: 'duplicate content' }] }),
-				});
-			});
-
-			const submitted = waitForXPostSubmitted(page, 1000);
-			await page.evaluate(() =>
-				fetch('https://x.com/i/api/graphql/test/CreateTweet', { method: 'POST' }),
+	it('confirms and returns the permalink when every guard passes', async () => {
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] }))
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', editorText: post.body }))
+			.mockResolvedValueOnce(
+				line({
+					text: 'Your post was sent. | View',
+					href: 'https://x.com/TheAvgTechDad/status/2086129413763006973',
+				}),
 			);
 
-			await expect(submitted).rejects.toThrow(/X did not confirm/);
-		} finally {
-			await page.close();
-		}
+		await expect(xPlatform.compose(account, post)).resolves.toEqual({
+			confirmed: true,
+			postUrl: 'https://x.com/TheAvgTechDad/status/2086129413763006973',
+		});
+		expect(runEgo).toHaveBeenCalledTimes(3);
 	});
 
-	it('allows enough time to type long X posts with humanized delays', () => {
-		expect(xTypingTimeoutMs('short post', 105)).toBe(30_000);
-		expect(xTypingTimeoutMs('x'.repeat(900), 105)).toBeGreaterThan(30_000);
+	// The readback check exists to catch keystrokes landing outside the editor (recon trap), not to
+	// police whitespace. X's rich editor normalizes line endings and trailing spaces, and only a
+	// single-line post was ever verified live — exact equality would reject real multi-line posts.
+	it('accepts a multi-line body whose readback differs only in trailing whitespace', async () => {
+		const multiline = { id: 'post2', body: 'first line\n\nthird line' } as unknown as PostRecord;
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] }))
+			.mockResolvedValueOnce(
+				line({ activeHandle: '@TheAvgTechDad', editorText: 'first line  \r\n\r\nthird line\n' }),
+			)
+			.mockResolvedValueOnce(
+				line({ text: 'Your post was sent. | View', href: 'https://x.com/TheAvgTechDad/status/123' }),
+			);
+
+		await expect(xPlatform.compose(account, multiline)).resolves.toEqual({
+			confirmed: true,
+			postUrl: 'https://x.com/TheAvgTechDad/status/123',
+		});
+	});
+
+	it('still rejects a readback that is genuinely different text', async () => {
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: [] }))
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', editorText: '' }));
+
+		await expect(xPlatform.compose(account, post)).rejects.toThrow(/does not match the intended post body/);
+		expect(runEgo).toHaveBeenCalledTimes(2); // click script never runs
+	});
+
+	it('switches accounts first when the target is logged in but not active, then posts', async () => {
+		runEgo
+			.mockResolvedValueOnce(line({ activeHandle: '@super__mx', otherHandles: ['@TheAvgTechDad'] }))
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', otherHandles: ['@super__mx'] }))
+			.mockResolvedValueOnce(line({ activeHandle: '@TheAvgTechDad', editorText: post.body }))
+			.mockResolvedValueOnce(
+				line({ text: 'Your post was sent. | View', href: 'https://x.com/TheAvgTechDad/status/1' }),
+			);
+
+		await expect(xPlatform.compose(account, post)).resolves.toEqual({
+			confirmed: true,
+			postUrl: 'https://x.com/TheAvgTechDad/status/1',
+		});
+		expect(runEgo).toHaveBeenCalledTimes(4);
+	});
+});
+
+// --- Fake DOM for the scoping algorithm (recon traps #1-#2) --------------------------------
+
+function makeElement(innerText: string, cells: MinimalElement[] = []): MinimalElement {
+	const el: MinimalElement = {
+		innerText,
+		parentElement: null,
+		querySelectorAll: (selector) => (selector === 'button[data-testid="UserCell"]' ? cells : []),
+	};
+	return el;
+}
+
+/**
+ * Builds a fake document shaped like the real one from docs/x-posting-recon.md: a sidebar
+ * button carrying the active handle (no data-testid/role anywhere marks it — trap #2), a
+ * switcher popup a few ancestors above AccountSwitcher_AddAccount_Button containing the
+ * real UserCell rows, and a "who to follow" UserCell *outside* that popup carrying a
+ * different handle (trap #1) sitting even further up the tree.
+ */
+function fakeDom(activeHandle: string, popupHandles: string[], strayHandle: string): MinimalDocument {
+	const strayCell = makeElement(`Suggested for you\n@${strayHandle}\nFollow`);
+	const popupCells = popupHandles.map((h) => makeElement(`Display Name\n@${h}`));
+
+	const farAncestor = makeElement('', [strayCell]); // reachable only if the walk goes too far up
+	const popupContainer = makeElement('', popupCells);
+	popupContainer.parentElement = farAncestor;
+
+	const addAccountAnchor = makeElement('');
+	addAccountAnchor.parentElement = popupContainer;
+
+	const activeButton = makeElement(`Display Name\n@${activeHandle}`);
+
+	return {
+		querySelector(selector: string) {
+			if (selector === '[data-testid="SideNav_AccountSwitcher_Button"]') return activeButton;
+			if (selector === '[data-testid="AccountSwitcher_AddAccount_Button"]') return addAccountAnchor;
+			return null;
+		},
+	};
+}
+
+describe('X session scoping (recon traps #1-#2)', () => {
+	it('reads the active handle from the sidebar button, which carries no data-testid marker of its own', () => {
+		const doc = fakeDom('TheAvgTechDad', ['super__mx', 'usepowershare'], 'missowaa');
+		expect(readXSessionInPage(doc).activeHandle).toBe('@TheAvgTechDad');
+	});
+
+	it('scopes UserCell rows to the switcher popup and excludes a match outside it', () => {
+		const doc = fakeDom('TheAvgTechDad', ['super__mx', 'usepowershare'], 'missowaa');
+		const session = readXSessionInPage(doc);
+		expect(session.otherHandles).toEqual(['@super__mx', '@usepowershare']);
+		expect(session.otherHandles).not.toContain('@missowaa');
+	});
+
+	it('reports a logged-out page as no active handle and no other accounts', () => {
+		const doc: MinimalDocument = { querySelector: () => null };
+		expect(readXSessionInPage(doc)).toEqual({ activeHandle: null, otherHandles: [] });
 	});
 });

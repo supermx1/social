@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { buildEvergreenPrompt, buildTopicalPrompt, parseDraftArray } from '../lib/generator';
+import { afterEach, describe, expect, it } from 'vitest';
+import { buildEvergreenPrompt, buildTopicalPrompt, parseDraftArray, resolveModel } from '../lib/generator';
+import { config } from '../lib/pb';
 
 const persona = {
 	name: 'TheAverageTechDad',
@@ -46,5 +47,21 @@ describe('generator prompt and output handling', () => {
 
 	it('parses a JSON draft array even when wrapped in a code fence', () => {
 		expect(parseDraftArray('```json\n["one", "two"]\n```')).toEqual(['one', 'two']);
+	});
+});
+
+describe('resolveModel', () => {
+	afterEach(() => {
+		delete config.GEN_MODEL;
+	});
+
+	it('raises a clear configuration error when GEN_MODEL is unset, instead of probing /models', async () => {
+		delete config.GEN_MODEL;
+		await expect(resolveModel()).rejects.toThrow(/GEN_MODEL is not set/);
+	});
+
+	it('returns GEN_MODEL from the env collection when set', async () => {
+		config.GEN_MODEL = 'glm-4.7-flash';
+		await expect(resolveModel()).resolves.toBe('glm-4.7-flash');
 	});
 });
