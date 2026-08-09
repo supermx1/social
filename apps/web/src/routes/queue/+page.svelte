@@ -37,6 +37,7 @@
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import TrashIcon from '@lucide/svelte/icons/trash-2';
 	import ImageIcon from '@lucide/svelte/icons/image';
+	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 
 	let { data } = $props();
@@ -102,6 +103,54 @@
 	let editRandomEnd = $state('');
 	let editRepeat = $state('');
 	let editRepeatUntil = $state('');
+
+	// --- New post ---------------------------------------------------------------------------
+	// Until now every post came from Generate or Topics, so there was no way to put a specific
+	// message in the queue by hand — which is exactly what a standing ad needs, since its copy is
+	// written once and never regenerated.
+	let newOpen = $state(false);
+	let newAccount = $state('');
+	let newBody = $state('');
+	let newScheduledFor = $state('');
+	let newRepeat = $state('');
+	let newRepeatUntil = $state('');
+
+	function openNew() {
+		newAccount = data.accounts[0]?.id ?? '';
+		newBody = '';
+		newScheduledFor = '';
+		newRepeat = '';
+		newRepeatUntil = '';
+		newOpen = true;
+	}
+
+	async function createPost(e: SubmitEvent) {
+		e.preventDefault();
+		error = '';
+		try {
+			const created = await pb.collection('posts').create({
+				account: newAccount,
+				// 'evergreen', not 'topical': there is no topic behind a hand-written post, and a
+				// topical post with no topic gets expired by the scheduler on its first tick.
+				kind: 'evergreen',
+				body: newBody,
+				media: [],
+				// 'approved' skips the review step the generator's drafts need — this copy was
+				// written by hand in this dialog, so there is nothing left to review.
+				status: 'approved',
+				timing_mode: 'exact',
+				scheduled_for: newScheduledFor || null,
+				repeat: newRepeat,
+				repeat_until: newRepeat ? newRepeatUntil || null : null,
+				attempts: 0
+			});
+			newOpen = false;
+			await invalidateAll();
+			return created;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Could not create the post.';
+		}
+	}
 
 	function openEdit(post: PostRow) {
 		editing = post;
@@ -189,6 +238,10 @@
 
 <PageHeader title="Queue" description="Edit, approve, schedule, or force-publish content.">
 	{#snippet actions()}
+		<Button onclick={openNew} disabled={data.accounts.length === 0}>
+			<PlusIcon class="size-4" />
+			New post
+		</Button>
 		<Select
 			type="single"
 			value={statusFilter}
@@ -448,5 +501,84 @@
 				</DialogFooter>
 			</form>
 		{/key}
+	</DialogContent>
+</Dialog>
+
+<Dialog bind:open={newOpen}>
+	<DialogContent class="max-w-2xl">
+		<form onsubmit={createPost} class="grid gap-4">
+			<DialogHeader>
+				<DialogTitle>New post</DialogTitle>
+				<DialogDescription>
+					Write a message by hand instead of generating one. Set it to repeat for a standing ad.
+				</DialogDescription>
+			</DialogHeader>
+
+			<div class="grid gap-1.5">
+				<Label for="newAccount">Account</Label>
+				<Select
+					type="single"
+					bind:value={newAccount}
+					items={data.accounts.map((a) => ({ value: a.id, label: `${a.personaName} · ${a.platform} · ${a.handle}` }))}
+				>
+					<SelectTrigger id="newAccount"><SelectValue placeholder="Choose an account" /></SelectTrigger>
+					<SelectContent>
+						{#each data.accounts as a (a.id)}
+							<SelectItem value={a.id} label="{a.personaName} · {a.platform} · {a.handle}">
+								{a.personaName} · {a.platform} · {a.handle}
+							</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
+			</div>
+
+			<div class="grid gap-1.5">
+				<Label for="newBody">Message</Label>
+				<Textarea id="newBody" bind:value={newBody} rows={6} required />
+			</div>
+
+			<div class="grid gap-1.5">
+				<Label>Scheduled for</Label>
+				<DateTimePicker bind:value={newScheduledFor} placeholder="Next posting window" />
+			</div>
+
+			<div class="grid gap-1.5">
+				<Label for="newRepeat">Repeats</Label>
+				<Select
+					type="single"
+					bind:value={newRepeat}
+					items={[
+						{ value: '', label: 'One-off' },
+						{ value: 'daily', label: 'Daily' },
+						{ value: 'weekdays', label: 'Weekdays' },
+						{ value: 'weekly', label: 'Weekly' }
+					]}
+				>
+					<SelectTrigger id="newRepeat"><SelectValue placeholder="One-off" /></SelectTrigger>
+					<SelectContent>
+						<SelectItem value="" label="One-off">One-off</SelectItem>
+						<SelectItem value="daily" label="Daily">Daily</SelectItem>
+						<SelectItem value="weekdays" label="Weekdays">Weekdays</SelectItem>
+						<SelectItem value="weekly" label="Weekly">Weekly</SelectItem>
+					</SelectContent>
+				</Select>
+			</div>
+
+			{#if newRepeat}
+				<div class="grid gap-1.5">
+					<Label>Until</Label>
+					<DateTimePicker bind:value={newRepeatUntil} placeholder="Repeats forever" />
+				</div>
+			{/if}
+
+			<p class="text-xs font-medium text-muted-foreground">
+				No image yet — add one with “Generate image” from the row menu once the post exists. WhatsApp
+				Status will not publish without one.
+			</p>
+
+			<DialogFooter>
+				<Button type="submit">Create</Button>
+			</DialogFooter>
+		</form>
 	</DialogContent>
 </Dialog>

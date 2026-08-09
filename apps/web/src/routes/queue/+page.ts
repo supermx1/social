@@ -64,6 +64,16 @@ export const load = async ({ url }) => {
 		totalItems: result.totalItems,
 		statusFilter: status,
 		personaFilter: personaId,
-		personas: personas.map((p) => ({ id: p.id, name: p.name }))
+		personas: personas.map((p) => ({ id: p.id, name: p.name })),
+		// For the New post composer. Only active accounts: a post aimed at a disabled account
+		// would sit in the queue forever, since the scheduler skips it on every tick.
+		accounts: accounts
+			.filter((a) => a.active)
+			.map((a) => ({
+				id: a.id,
+				platform: a.platform as string,
+				handle: a.handle as string,
+				personaName: personas.find((p) => p.id === a.persona)?.name ?? ''
+			}))
 	};
 };
