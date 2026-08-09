@@ -1,6 +1,6 @@
 import { pb } from '$lib/pb';
 
-const PER_PAGE = 50;
+const PER_PAGE = 30;
 
 export const load = async ({ url }) => {
 	const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
