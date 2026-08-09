@@ -80,7 +80,19 @@ async function markNeedsReauth(account: AccountRecord) {
 	await alertTelegram(`Re-auth needed for ${account.platform} ${account.handle || account.id}.`);
 }
 
-async function publishPost(post: PostRecord, account: AccountRecord, jobId?: string) {
+export async function publishPost(post: PostRecord, account: AccountRecord, jobId?: string) {
+	// Two post_now jobs can legitimately exist for one post: the scheduler enqueues one when the
+	// post comes due, and "Post now" in the queue creates another directly. Nothing downstream
+	// re-reads the post's status, so without this the second job publishes it a second time —
+	// found with two such jobs sitting in the queue against a single WhatsApp status.
+	// Only 'posted' is refused, not 'posting': a worker killed mid-publish leaves posts stuck in
+	// 'posting', and those must stay retryable.
+	if (post.status === 'posted') {
+		await pb
+			.collection('run_log')
+			.create({ account: account.id, post: post.id, action: 'post', result: 'ok', detail: 'already posted — skipped' });
+		return;
+	}
 	try {
 		await pb.collection('posts').update(post.id, { status: 'posting' });
 		const onProgress = jobId ? (detail: string) => reportProgress(jobId, detail) : undefined;

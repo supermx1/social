@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { attachImages, draftImage, hasPublishEvidence } from '../lib/worker';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { attachImages, draftImage, hasPublishEvidence, publishPost } from '../lib/worker';
 import type { AccountRecord, PersonaRecord, PostRecord } from '../types';
 
 vi.mock('../lib/images', () => ({
@@ -8,6 +8,34 @@ vi.mock('../lib/images', () => ({
 	}),
 	// ponytail: distinct class identity is all instanceof needs — no real behaviour to mock.
 	NoImageStyleError: class NoImageStyleError extends Error {},
+}));
+
+const composePost = vi.fn();
+vi.mock('../lib/browser', () => ({
+	composePost: (...args: unknown[]) => composePost(...args),
+	loginStart: vi.fn(),
+	verifySession: vi.fn(),
+	warmSession: vi.fn(),
+}));
+
+// publishPost reads/writes the module-level `pb`, not an injectable client (unlike draftImage /
+// attachImages below) — so this mock, not fakeClient(), is what a publishPost test needs.
+const postUpdate = vi.fn(async () => ({}));
+const runLogCreate = vi.fn(async () => ({}));
+vi.mock('../lib/pb', () => ({
+	pb: {
+		collection: (name: string) => {
+			if (name === 'posts') return { update: postUpdate };
+			if (name === 'run_log') return { create: runLogCreate };
+			if (name === 'accounts') return { update: vi.fn(async () => ({})) };
+			throw new Error(`unexpected collection ${name}`);
+		},
+		// attachImages (exercised below) calls the real SDK's pb.filter — a pure string
+		// template, no network — regardless of which client it was given, so the mock needs it too.
+		filter: (raw: string, params: Record<string, unknown>) =>
+			raw.replace(/\{:(\w+)\}/g, (_, key) => JSON.stringify(params[key])),
+	},
+	config: {},
 }));
 
 describe('publish evidence', () => {
@@ -99,5 +127,40 @@ describe('image generation (non-fatal, design doc §4.3)', () => {
 
 		await expect(draftImage(post, persona, client)).resolves.toBeUndefined();
 		expect(post.error_message).toContain('Workers AI image request failed');
+	});
+});
+
+describe('publishPost — double-publish guard', () => {
+	beforeEach(() => {
+		composePost.mockReset();
+		postUpdate.mockClear();
+		runLogCreate.mockClear();
+	});
+
+	const account = { id: 'acc1', platform: 'whatsapp', handle: 'Kasa WhatsApp' } as unknown as AccountRecord;
+
+	// The bug this covers: the scheduler enqueues a post_now job when a post comes due, and
+	// "Post now" in the queue creates another directly. Nothing downstream re-checks the post's
+	// status, so a second job for an already-posted post republished it for real on WhatsApp.
+	it('skips a post that already published, without touching the browser', async () => {
+		const post = { id: 'p1', status: 'posted', attempts: 0 } as unknown as PostRecord;
+
+		await publishPost(post, account);
+
+		expect(composePost).not.toHaveBeenCalled();
+		expect(postUpdate).not.toHaveBeenCalled();
+		expect(runLogCreate).toHaveBeenCalledWith(
+			expect.objectContaining({ post: 'p1', detail: expect.stringContaining('already posted') }),
+		);
+	});
+
+	it('still publishes a post stuck in "posting" from a worker that died mid-run', async () => {
+		const post = { id: 'p2', status: 'posting', attempts: 0 } as unknown as PostRecord;
+		composePost.mockResolvedValue({ confirmed: true });
+
+		await publishPost(post, account);
+
+		expect(composePost).toHaveBeenCalledTimes(1);
+		expect(postUpdate).toHaveBeenCalledWith('p2', expect.objectContaining({ status: 'posted' }));
 	});
 });
