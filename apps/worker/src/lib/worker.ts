@@ -66,12 +66,22 @@ export function hasPublishEvidence(result: { postUrl?: string; confirmed?: boole
 	return Boolean(result.postUrl || result.confirmed);
 }
 
-async function verifyAndRecord(account: AccountRecord) {
+async function verifyAndRecord(account: AccountRecord, jobId?: string) {
 	const active = await verifySession(account);
 	await pb.collection('accounts').update(account.id, {
 		session_status: active ? 'active' : 'needs_reauth',
 		last_verified_at: active ? new Date().toISOString() : account.last_verified_at,
 	});
+	// The job legitimately succeeds either way — the check ran. But "done" on its own told the
+	// operator nothing about WHY the badge still said needs_reauth, so say which answer it got.
+	if (jobId) {
+		await reportProgress(
+			jobId,
+			active
+				? `session active for ${account.handle || account.platform}`
+				: `no live session for ${account.handle || account.platform} — log in, then confirm`,
+		);
+	}
 	if (!active) await markNeedsReauth(account);
 }
 
@@ -112,17 +122,29 @@ export async function publishPost(post: PostRecord, account: AccountRecord, jobI
 	} catch (error) {
 		const attempts = post.attempts + 1;
 		const terminal = attempts >= 3;
+		const message = error instanceof Error ? error.message : String(error);
 		await pb.collection('posts').update(post.id, {
 			status: terminal ? 'error' : 'approved',
 			attempts,
-			error_message: error instanceof Error ? error.message : String(error),
+			error_message: message,
 		});
-		if (error instanceof Error && error.message.includes('Session is not active')) {
+		// Failures were invisible here: only the success path wrote a run_log row, so a post that
+		// never published left no trace in the history at all.
+		await pb
+			.collection('run_log')
+			.create({ account: account.id, post: post.id, action: 'post', result: 'fail', detail: message.slice(0, 500) });
+		if (message.includes('Session is not active')) {
 			await markNeedsReauth(account);
 		}
 		if (terminal) {
 			await alertTelegram(`Post failed after retries for ${account.platform} ${account.handle}: ${error}`);
 		}
+		// Rethrow so the JOB is marked error too. Swallowing it here reported a failed publish as a
+		// successful job: the Activity log read "done" while nothing had been posted, which is
+		// exactly the "the browser opened and nothing happened" symptom with no error to point at.
+		// Nothing auto-retries a failed job (failJob only records it) — the post going back to
+		// 'approved' above is what lets the scheduler try again.
+		throw error;
 	}
 }
 
@@ -143,7 +165,7 @@ async function executeJob(job: JobRecord) {
 		case 'login_confirm':
 		case 'verify': {
 			if (!('accountId' in payload)) throw new Error('accountId missing');
-			await verifyAndRecord(await getAccount(payload.accountId));
+			await verifyAndRecord(await getAccount(payload.accountId), job.id);
 			break;
 		}
 		case 'warm': {

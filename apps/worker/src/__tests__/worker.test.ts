@@ -164,3 +164,38 @@ describe('publishPost — double-publish guard', () => {
 		expect(postUpdate).toHaveBeenCalledWith('p2', expect.objectContaining({ status: 'posted' }));
 	});
 });
+
+describe('publishPost — a failed publish is a failed job', () => {
+	beforeEach(() => {
+		composePost.mockReset();
+		postUpdate.mockClear();
+		runLogCreate.mockClear();
+	});
+
+	const account = { id: 'acc1', platform: 'x', handle: '@TheAvgTechDad' } as unknown as AccountRecord;
+
+	// Swallowing the error reported a failed publish as a successful job: the Activity log read
+	// "done" while nothing had been posted, and there was no error anywhere to point at.
+	it('rethrows so the job is marked error, and records the failure in run_log', async () => {
+		const post = { id: 'p3', status: 'approved', attempts: 0 } as unknown as PostRecord;
+		composePost.mockRejectedValue(new Error('X composer never opened'));
+
+		await expect(publishPost(post, account)).rejects.toThrow('X composer never opened');
+
+		expect(postUpdate).toHaveBeenCalledWith(
+			'p3',
+			expect.objectContaining({ status: 'approved', attempts: 1, error_message: 'X composer never opened' }),
+		);
+		expect(runLogCreate).toHaveBeenCalledWith(
+			expect.objectContaining({ result: 'fail', detail: expect.stringContaining('never opened') }),
+		);
+	});
+
+	it('marks the post terminally errored on the third failure', async () => {
+		const post = { id: 'p4', status: 'approved', attempts: 2 } as unknown as PostRecord;
+		composePost.mockRejectedValue(new Error('still broken'));
+
+		await expect(publishPost(post, account)).rejects.toThrow('still broken');
+		expect(postUpdate).toHaveBeenCalledWith('p4', expect.objectContaining({ status: 'error', attempts: 3 }));
+	});
+});

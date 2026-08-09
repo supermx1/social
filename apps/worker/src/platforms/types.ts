@@ -59,10 +59,22 @@ export function normalizeHandle(handle: string): string {
  * '@TheAvgTechDad' while LinkedIn reports display names like 'Kasa' and
  * 'TechGFX Technologies Limited'. Comparing case-insensitively on the bare name works for both,
  * where building `'@' + handle` only ever worked for X.
+ *
+ * Hyphens, underscores and whitespace runs all collapse to one separator, because LinkedIn reports
+ * a personal profile as its URL slug ('chukwuemeka-anyakora') while the account row holds the
+ * display name ('Chukwuemeka Anyakora'). Without that, verify could never match a personal
+ * LinkedIn profile and pinned the account to needs_reauth permanently — even though compose()
+ * accepted the very same session, because linkedin.ts's own nameMatches() already flattened this
+ * way. Two comparisons of the same thing disagreeing is what made it look like a dead session.
  */
 export function sessionHasHandle(session: SessionStatusResult, handle: string): boolean {
-	const wanted = normalizeHandle(handle).toLowerCase();
+	const flatten = (v: string) =>
+		normalizeHandle(v)
+			.toLowerCase()
+			.replace(/[-_\s]+/g, ' ')
+			.trim();
+	const wanted = flatten(handle);
 	return [session.activeHandle, ...session.otherHandles]
 		.filter((h): h is string => Boolean(h))
-		.some((h) => normalizeHandle(h).toLowerCase() === wanted);
+		.some((h) => flatten(h) === wanted);
 }

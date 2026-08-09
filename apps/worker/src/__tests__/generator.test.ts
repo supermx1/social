@@ -54,6 +54,28 @@ describe('generator prompt and output handling', () => {
 	it('parses a JSON draft array even when wrapped in a code fence', () => {
 		expect(parseDraftArray('```json\n["one", "two"]\n```')).toEqual(['one', 'two']);
 	});
+
+	// "Return a JSON array of strings" is a request, not a guarantee — the same prompt that
+	// answers correctly a dozen times occasionally returns one of these instead, and failing the
+	// job over it throws away a generation the user already paid for.
+	it('unwraps a single array-valued property', () => {
+		expect(parseDraftArray('{"posts": ["one", "two"]}')).toEqual(['one', 'two']);
+	});
+
+	it('pulls the text out of an array of draft objects', () => {
+		expect(parseDraftArray('[{"text": "one"}, {"text": "two"}]')).toEqual(['one', 'two']);
+		expect(parseDraftArray('[{"content": "a"}]')).toEqual(['a']);
+	});
+
+	it('refuses to guess when an object offers two candidate arrays', () => {
+		expect(() => parseDraftArray('{"posts": ["a"], "alts": ["b"]}')).toThrow(/other than a JSON array/);
+	});
+
+	// The old message named the symptom and nothing else, which is why an intermittent bad shape
+	// could not be diagnosed from the Activity log at all.
+	it('reports the raw output when the shape is genuinely wrong', () => {
+		expect(() => parseDraftArray('{"error": "rate limited"}')).toThrow(/rate limited/);
+	});
 });
 
 describe('resolveModel', () => {

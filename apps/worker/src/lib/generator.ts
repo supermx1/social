@@ -87,10 +87,48 @@ export function parseDraftArray(value: string) {
 		// from the Activity log alone (truncated-by-max_tokens vs. genuinely empty, etc.).
 		throw new Error(`${message} — raw model output (${stripped.length} chars): ${JSON.stringify(stripped.slice(0, 300))}`);
 	}
-	if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
-		throw new Error('Generator returned something other than a JSON array of strings.');
+	const drafts = coerceDraftArray(parsed);
+	if (!drafts) {
+		// The raw output goes in the message for the same reason the parse branch above does it:
+		// without it this failure is undiagnosable from the Activity log, and because the shape is
+		// intermittent you cannot reproduce it on demand to find out what the model actually said.
+		throw new Error(
+			`Generator returned something other than a JSON array of strings — raw model output (${stripped.length} chars): ${JSON.stringify(stripped.slice(0, 300))}`,
+		);
 	}
-	return parsed;
+	return drafts;
+}
+
+/** The one string field a draft object might be hiding behind. */
+function pickText(item: unknown): string | null {
+	if (typeof item === 'string') return item;
+	if (item && typeof item === 'object') {
+		for (const key of ['text', 'post', 'content', 'body', 'draft']) {
+			const value = (item as Record<string, unknown>)[key];
+			if (typeof value === 'string') return value;
+		}
+	}
+	return null;
+}
+
+/**
+ * Coerces the shapes a model actually returns into a plain string array, or null if it is genuinely
+ * not draft text. "Return a JSON array of strings" is a request, not a guarantee: the same prompt
+ * that answers correctly a dozen times will occasionally wrap the array in an object or make each
+ * item a `{text: ...}` record, and failing the whole job over that wastes a paid generation.
+ */
+export function coerceDraftArray(parsed: unknown): string[] | null {
+	if (Array.isArray(parsed)) {
+		const texts = parsed.map(pickText);
+		return texts.every((t): t is string => t !== null) ? texts : null;
+	}
+	if (parsed && typeof parsed === 'object') {
+		// {"posts": [...]} / {"drafts": [...]} — unwrap only when there is exactly one array to
+		// choose from, so we never silently guess between two candidate lists.
+		const arrays = Object.values(parsed).filter(Array.isArray);
+		if (arrays.length === 1) return coerceDraftArray(arrays[0]);
+	}
+	return null;
 }
 
 /**
@@ -183,6 +221,11 @@ export async function generateDrafts(payload: {
 	topicId?: string;
 	pillar?: string;
 }) {
+	// Checked before the lookup so a blank id fails as itself. Without this the empty string flows
+	// into the filter, matches nothing, and reports "No active x account for persona ." — an error
+	// that names no persona and sends you looking for a missing account instead of a missing field.
+	if (!payload.personaId) throw new Error('Generate job has no persona — choose one and queue it again.');
+
 	const account = await pb
 		.collection('accounts')
 		.getFirstListItem<AccountRecord>(

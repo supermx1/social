@@ -82,10 +82,15 @@
 	let generateDialogOpen = $state(false);
 	let generateFor = $state<TopicRow | null>(null);
 	let generatePlatform = $state('x');
+	// Preselected rather than left blank: the persona Select had no default, so submitting the
+	// dialog untouched queued a job with personaId "" and the worker failed with the baffling
+	// "No active x account for persona ." — an error naming a persona that isn't there.
+	let generatePersonaId = $state('');
 
 	function openGenerate(topic: TopicRow) {
 		generateFor = topic;
 		generatePlatform = 'x';
+		generatePersonaId = data.personas[0]?.id ?? '';
 		generateDialogOpen = true;
 	}
 
@@ -98,7 +103,7 @@
 			await pb.collection('jobs').create({
 				type: 'generate',
 				payload: {
-					personaId: textValue(fd, 'personaId'),
+						personaId: generatePersonaId,
 					platform: textValue(fd, 'platform'),
 					n: numberValue(fd, 'n', 3),
 					topicId: generateFor.id
@@ -318,7 +323,12 @@
 
 				<div class="grid gap-1.5">
 					<Label for="generatePersonaId">Persona</Label>
-					<Select type="single" name="personaId" items={data.personas.map((p) => ({ value: p.id, label: p.name }))}>
+					<Select
+						type="single"
+						name="personaId"
+						bind:value={generatePersonaId}
+						items={data.personas.map((p) => ({ value: p.id, label: p.name }))}
+					>
 						<SelectTrigger id="generatePersonaId"><SelectValue placeholder="Persona" /></SelectTrigger>
 						<SelectContent>
 							{#each data.personas as persona (persona.id)}
