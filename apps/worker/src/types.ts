@@ -9,7 +9,8 @@ export type Platform =
 	| 'facebook_page'
 	| 'youtube_community'
 	| 'instagram'
-	| 'threads';
+	| 'threads'
+	| 'whatsapp';
 
 export type SessionStatus = 'active' | 'needs_reauth' | 'unknown' | 'disabled';
 

@@ -1,6 +1,6 @@
 import { pb } from '$lib/pb';
 
-const platforms = ['x', 'linkedin', 'facebook_page', 'youtube_community'];
+const platforms = ['x', 'linkedin', 'whatsapp', 'facebook_page', 'youtube_community'];
 
 export const load = async () => {
 	const [personas, accounts] = await Promise.all([

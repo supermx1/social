@@ -2,12 +2,15 @@ import type { Platform } from '../types';
 import type { EgoPlatformModule } from './types';
 import { xPlatform } from './x';
 import { linkedinPlatform } from './linkedin';
+import { whatsappPlatform } from './whatsapp';
 
-// Both modules are backed by their own live recon run — docs/x-posting-recon.md and
-// docs/linkedin-posting-recon.md. Nothing gets registered here on guessed selectors.
+// Every module here is backed by its own live recon run — docs/x-posting-recon.md,
+// docs/linkedin-posting-recon.md, docs/whatsapp-posting-recon.md. Nothing gets registered on
+// guessed selectors.
 const modules = new Map<string, EgoPlatformModule>([
 	[xPlatform.platform, xPlatform],
 	[linkedinPlatform.platform, linkedinPlatform],
+	[whatsappPlatform.platform, whatsappPlatform],
 ]);
 
 export function getPlatform(platform: Platform): EgoPlatformModule {

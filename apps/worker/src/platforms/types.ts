@@ -22,6 +22,13 @@ export type EgoPlatformModule = {
 	loginUrl: string;
 	/** ego-browser task space this platform's scripts run in; reused across jobs. */
 	taskSpace: string;
+	/**
+	 * True when the session can only ever be one identity, so "is this account live" reduces to
+	 * "is anyone logged in" — WhatsApp Web, where there is no switcher and no company/personal
+	 * choice. Without this, the shared session pre-check compares the account's label against a
+	 * handle the platform cannot report and refuses to post at all.
+	 */
+	singleIdentity?: boolean;
 	/** One page read: who's active, plus every other account with a live session. */
 	readSession(): Promise<SessionStatusResult>;
 	/**
