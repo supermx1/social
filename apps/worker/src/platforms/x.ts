@@ -21,6 +21,7 @@ const TOAST_POLL_ATTEMPTS = 10;
 const MEDIA_POLL_ATTEMPTS = 30; // ~1s each; a large image can take a while to process
 const SWITCH_TARGET_ATTR = 'data-ego-switch-target';
 const MAX_MEDIA = 4; // X's own per-post limit
+const MAX_BODY = 280; // X's own per-post character limit
 const CLICK_SETTLE_S = 3;
 const CLICK_ATTEMPTS = 3;
 
@@ -392,6 +393,14 @@ async function ensureActiveAccount(account: AccountRecord, onProgress?: Progress
 }
 
 async function compose(account: AccountRecord, post: PostRecord, onProgress?: ProgressReporter) {
+	// Checked here rather than trusted to the prompt. "Length target: <= 280" is only an
+	// instruction to the model, and drafts land at 265 routinely — one edit tips them over. Past
+	// the limit X just leaves the post control disabled, so without this the run fails several
+	// steps later as "send control is not enabled", which reads like a broken selector.
+	if (post.body.length > MAX_BODY) {
+		throw new Error(`X posts are limited to ${MAX_BODY} characters; this one is ${post.body.length}. Shorten it and retry.`);
+	}
+
 	await onProgress?.('checking account session');
 	// Guard #1 — nothing below runs, no compose script and no click, unless this passes.
 	await ensureActiveAccount(account, onProgress);

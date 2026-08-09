@@ -17,6 +17,17 @@
 	let error = $state('');
 	let done = $state(false);
 
+	// Both selects are preselected rather than starting on a placeholder. Left blank, the form
+	// submitted personaId "" / platform "" and the worker failed with "No active  account for
+	// persona ." — the same trap the Topics generate dialog had.
+	let personaId = $state('');
+	let platform = $state('x');
+	// Seeded in an effect, not from `data` at init: personas arrive via the realtime subscription
+	// below, so reading data.personas[0] once would capture an empty list and stay empty.
+	$effect(() => {
+		if (!personaId && data.personas.length > 0) personaId = data.personas[0].id;
+	});
+
 	onMount(() => subscribeToCollectionChanges(pb, ['personas'], invalidateAll));
 
 	async function submit(e: SubmitEvent) {
@@ -69,7 +80,12 @@
 		<form onsubmit={submit} class="grid gap-4 sm:grid-cols-2">
 			<div class="grid gap-1.5">
 				<Label for="personaId">Persona</Label>
-				<Select type="single" name="personaId" items={data.personas.map((p) => ({ value: p.id, label: p.name }))}>
+				<Select
+					type="single"
+					name="personaId"
+					bind:value={personaId}
+					items={data.personas.map((p) => ({ value: p.id, label: p.name }))}
+				>
 					<SelectTrigger id="personaId"><SelectValue placeholder="Persona" /></SelectTrigger>
 					<SelectContent>
 						{#if data.personas.length === 0}
@@ -85,7 +101,7 @@
 
 			<div class="grid gap-1.5">
 				<Label for="platform">Platform</Label>
-				<Select type="single" name="platform">
+				<Select type="single" name="platform" bind:value={platform}>
 					<SelectTrigger id="platform"><SelectValue placeholder="Platform" /></SelectTrigger>
 					<SelectContent>
 						<SelectItem value="x" label="x">x</SelectItem>

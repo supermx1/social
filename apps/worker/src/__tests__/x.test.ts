@@ -305,3 +305,17 @@ describe('X session scoping (recon traps #1-#2)', () => {
 		expect(readXSessionInPage(doc)).toEqual({ activeHandle: null, otherHandles: [] });
 	});
 });
+
+describe('X — the 280 character limit', () => {
+	beforeEach(() => runEgo.mockReset());
+
+	// Past the limit X simply leaves the post control disabled, so an unchecked over-length body
+	// failed several steps later as "send control is not enabled" — which reads like a broken
+	// selector rather than a too-long post. Drafts routinely land at 265, so one edit tips them over.
+	it('refuses an over-length body before opening the browser', async () => {
+		const long = { id: 'p', body: 'x'.repeat(281), media: [] } as unknown as PostRecord;
+
+		await expect(xPlatform.compose(account, long)).rejects.toThrow(/limited to 280 characters; this one is 281/);
+		expect(runEgo).not.toHaveBeenCalled();
+	});
+})
