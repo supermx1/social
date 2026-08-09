@@ -81,6 +81,60 @@ cronAdd('scheduler', '* * * * *', () => {
 			post.set('status', 'skipped');
 			$app.save(post);
 		}
+
+		// Repeat chains: a finished occurrence of a repeating post hands `repeat` on to a fresh
+		// successor record and gives it up itself, so exactly one post in a chain is ever
+		// repeatable — that is the whole idempotency guard, no "does a successor exist" query.
+		// `skipped` is included deliberately: the catch-up guard above marks
+		// overdue posts skipped, and a daily ad must not die permanently just
+		// because one day was missed.
+		const repeating = $app.findRecordsByFilter(
+			'posts',
+			"repeat != '' && (status = 'posted' || status = 'skipped')",
+			'',
+			0,
+			0,
+			{},
+		);
+		for (const post of repeating) {
+			try {
+				const previous =
+					h.isoOrNull(post, 'scheduled_for') || h.isoOrNull(post, 'posted_at') || h.isoOrNull(post, 'updated');
+				const repeat = post.getString('repeat');
+				const repeatUntil = h.isoOrNull(post, 'repeat_until');
+				const next = scheduler.nextRepeatOccurrence({ repeat, repeatUntil, previous, now: new Date() });
+
+				// Clear `repeat` on the finished post FIRST, and only then create the successor.
+				// The other order is a trap: if the successor saves but this one fails, the post
+				// keeps its `repeat` and spawns another successor on the NEXT tick, and every
+				// duplicate carries `repeat` too — one stuck save becomes a post a minute, all of
+				// them scheduled and all of them real. Failing this way round can only ever end a
+				// chain early, which the operator can see and fix; the other way silently floods.
+				post.set('repeat', '');
+				$app.save(post);
+
+				if (next) {
+					const successor = new Record($app.findCollectionByNameOrId('posts'));
+					successor.set('account', post.get('account'));
+					successor.set('topic', post.get('topic'));
+					successor.set('kind', post.getString('kind'));
+					successor.set('body', post.getString('body'));
+					successor.set('media', post.get('media'));
+					successor.set('timing_mode', post.getString('timing_mode'));
+					successor.set('repeat', repeat);
+					// Round-tripped through toPbDate rather than copied with getString(): this is a
+					// date field, and its string form is not the format the setter expects back.
+					successor.set('repeat_until', repeatUntil ? h.toPbDate(repeatUntil) : '');
+					successor.set('repeat_of', post.getString('repeat_of') || post.id);
+					successor.set('status', 'approved');
+					successor.set('scheduled_for', h.toPbDate(next));
+					successor.set('attempts', 0);
+					$app.save(successor);
+				}
+			} catch (err) {
+				console.error('scheduler cron (repeat pass):', err);
+			}
+		}
 	} catch (err) {
 		console.error('scheduler cron:', err);
 	}

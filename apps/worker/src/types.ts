@@ -29,6 +29,7 @@ export type PostStatus =
 	| 'expired'
 	| 'skipped';
 export type TimingMode = 'exact' | 'random';
+export type RepeatRule = '' | 'daily' | 'weekly' | 'weekdays';
 
 export type JobType =
 	| 'login_start'
@@ -133,6 +134,10 @@ export type PostRecord = Base & {
 	attempts: number;
 	error_message: string;
 	variant_group: string;
+	/** Empty string = one-off post (not recurring). Otherwise: the schedule rule. */
+	repeat: RepeatRule;
+	repeat_until: string;
+	repeat_of: string;
 };
 
 export type JobRecord = Base & {

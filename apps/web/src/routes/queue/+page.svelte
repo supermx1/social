@@ -100,6 +100,8 @@
 	let editScheduledFor = $state('');
 	let editRandomStart = $state('');
 	let editRandomEnd = $state('');
+	let editRepeat = $state('');
+	let editRepeatUntil = $state('');
 
 	function openEdit(post: PostRow) {
 		editing = post;
@@ -108,6 +110,8 @@
 		editScheduledFor = post.scheduledFor ?? '';
 		editRandomStart = post.randomWindowStart ?? '';
 		editRandomEnd = post.randomWindowEnd ?? '';
+		editRepeat = post.repeat ?? '';
+		editRepeatUntil = post.repeatUntil ?? '';
 		dialogOpen = true;
 	}
 
@@ -124,7 +128,12 @@
 	async function saveEdit(e: SubmitEvent) {
 		e.preventDefault();
 		if (!editing) return;
-		const payload: Record<string, unknown> = { body: editBody, timing_mode: editTimingMode };
+		const payload: Record<string, unknown> = {
+			body: editBody,
+			timing_mode: editTimingMode,
+			repeat: editRepeat,
+			repeat_until: editRepeat ? editRepeatUntil || null : null
+		};
 		if (editTimingMode === 'exact') {
 			payload.scheduled_for = editScheduledFor || null;
 		} else {
@@ -169,6 +178,12 @@
 			return s && e ? `Random: ${s} – ${e}` : 'Random window not set';
 		}
 		return formatDate(post.scheduledFor) ?? 'Not scheduled';
+	}
+
+	const repeatLabels: Record<string, string> = { daily: 'Daily', weekdays: 'Weekdays', weekly: 'Weekly' };
+
+	function repeatUntilLabel(post: PostRow) {
+		return post.repeatUntil ? `Repeats until ${formatDate(post.repeatUntil)}` : 'Repeats indefinitely';
 	}
 </script>
 
@@ -241,7 +256,17 @@
 								</div>
 							</TableCell>
 							<TableCell><Badge variant="outline">{post.kind}</Badge></TableCell>
-							<TableCell class="text-muted-foreground">{timingLabel(post)}</TableCell>
+							<TableCell class="text-muted-foreground">
+								{timingLabel(post)}
+								{#if post.repeat}
+									<Tooltip>
+										<TooltipTrigger class="ml-1.5 cursor-default border-0 bg-transparent p-0 align-middle">
+											<Badge variant="muted">{repeatLabels[post.repeat] ?? post.repeat}</Badge>
+										</TooltipTrigger>
+										<TooltipContent>{repeatUntilLabel(post)}</TooltipContent>
+									</Tooltip>
+								{/if}
+							</TableCell>
 							<TableCell>
 								{#if post.status === 'error' && post.errorMessage}
 									<Tooltip>
@@ -380,6 +405,35 @@
 							<Label>Window end</Label>
 							<DateTimePicker bind:value={editRandomEnd} placeholder="Latest" />
 						</div>
+					</div>
+				{/if}
+
+				<div class="grid gap-1.5">
+					<Label for="repeat">Repeats</Label>
+					<Select
+						type="single"
+						bind:value={editRepeat}
+						items={[
+							{ value: '', label: 'One-off' },
+							{ value: 'daily', label: 'Daily' },
+							{ value: 'weekdays', label: 'Weekdays' },
+							{ value: 'weekly', label: 'Weekly' }
+						]}
+					>
+						<SelectTrigger id="repeat"><SelectValue placeholder="One-off" /></SelectTrigger>
+						<SelectContent>
+							<SelectItem value="" label="One-off">One-off</SelectItem>
+							<SelectItem value="daily" label="Daily">Daily</SelectItem>
+							<SelectItem value="weekdays" label="Weekdays">Weekdays</SelectItem>
+							<SelectItem value="weekly" label="Weekly">Weekly</SelectItem>
+						</SelectContent>
+					</Select>
+				</div>
+
+				{#if editRepeat}
+					<div class="grid gap-1.5">
+						<Label>Until</Label>
+						<DateTimePicker bind:value={editRepeatUntil} placeholder="Repeats forever" />
 					</div>
 				{/if}
 

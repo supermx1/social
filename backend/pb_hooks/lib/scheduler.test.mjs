@@ -1,9 +1,10 @@
-// Run: node --test backend/pb_hooks/lib/
+// Run: node --test backend/pb_hooks/lib/scheduler.test.mjs
+// (the directory form stopped resolving under Node 26 — it tries to require the dir as a module)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { chooseSchedulerAction, defaultTzMinutes } = createRequire(import.meta.url)('./scheduler.js');
+const { chooseSchedulerAction, defaultTzMinutes, nextRepeatOccurrence } = createRequire(import.meta.url)('./scheduler.js');
 
 const account = (over = {}) => ({
 	active: true,
@@ -150,4 +151,132 @@ test('defaultTzMinutes returns account-local minutes (DST-aware)', () => {
 	const noon = new Date('2026-07-07T12:00:00Z');
 	assert.equal(defaultTzMinutes(noon, 'Africa/Lagos'), 13 * 60); // UTC+1
 	assert.equal(defaultTzMinutes(noon, 'America/New_York'), 8 * 60); // UTC-4 (EDT)
+});
+
+// --- nextRepeatOccurrence ------------------------------------------------
+
+test('daily repeat advances by 24h, preserving time of day', () => {
+	const next = nextRepeatOccurrence({
+		repeat: 'daily',
+		repeatUntil: null,
+		previous: '2026-07-07T09:00:00Z',
+		now: new Date('2026-07-07T09:30:00Z'),
+	});
+	assert.equal(next.toISOString(), '2026-07-08T09:00:00.000Z');
+});
+
+test('weekly repeat advances by 7 days', () => {
+	const next = nextRepeatOccurrence({
+		repeat: 'weekly',
+		repeatUntil: null,
+		previous: '2026-07-07T09:00:00Z',
+		now: new Date('2026-07-07T09:30:00Z'),
+	});
+	assert.equal(next.toISOString(), '2026-07-14T09:00:00.000Z');
+});
+
+test('weekdays repeat advances by one day on a normal weekday', () => {
+	// 2026-07-07 is a Tuesday
+	const next = nextRepeatOccurrence({
+		repeat: 'weekdays',
+		repeatUntil: null,
+		previous: '2026-07-07T09:00:00Z',
+		now: new Date('2026-07-07T09:30:00Z'),
+	});
+	assert.equal(next.toISOString(), '2026-07-08T09:00:00.000Z'); // Wednesday
+});
+
+test('weekdays repeat rolls a Friday to Monday, never Sat/Sun', () => {
+	// 2026-07-10 is a Friday
+	const next = nextRepeatOccurrence({
+		repeat: 'weekdays',
+		repeatUntil: null,
+		previous: '2026-07-10T09:00:00Z',
+		now: new Date('2026-07-10T09:30:00Z'),
+	});
+	assert.equal(next.getUTCDay(), 1); // Monday
+	assert.equal(next.toISOString(), '2026-07-13T09:00:00.000Z');
+});
+
+test('time of day is preserved across a missed-occurrence roll-forward', () => {
+	const next = nextRepeatOccurrence({
+		repeat: 'daily',
+		repeatUntil: null,
+		previous: '2026-07-01T09:00:00Z',
+		now: new Date('2026-07-07T12:00:00Z'), // several days later
+	});
+	assert.equal(next.getUTCHours(), 9);
+	assert.equal(next.getUTCMinutes(), 0);
+});
+
+test('missed occurrences roll forward to the future, not a backlog', () => {
+	// A week of downtime: `previous` is a week stale relative to `now`.
+	const next = nextRepeatOccurrence({
+		repeat: 'daily',
+		repeatUntil: null,
+		previous: '2026-07-01T09:00:00Z',
+		now: new Date('2026-07-07T15:00:00Z'),
+	});
+	// The single next future slot, not a burst of backdated occurrences.
+	assert.equal(next.toISOString(), '2026-07-08T09:00:00.000Z');
+	assert.ok(next.getTime() > new Date('2026-07-07T15:00:00Z').getTime());
+});
+
+test('repeat_until ends the chain once the next occurrence would be past it', () => {
+	const next = nextRepeatOccurrence({
+		repeat: 'daily',
+		repeatUntil: '2026-07-07T23:59:59Z',
+		previous: '2026-07-07T09:00:00Z',
+		now: new Date('2026-07-07T10:00:00Z'),
+	});
+	assert.equal(next, null);
+});
+
+test('empty repeat returns null', () => {
+	const next = nextRepeatOccurrence({
+		repeat: '',
+		repeatUntil: null,
+		previous: '2026-07-07T09:00:00Z',
+		now: new Date('2026-07-07T10:00:00Z'),
+	});
+	assert.equal(next, null);
+});
+
+test('unrecognised repeat value returns null', () => {
+	const next = nextRepeatOccurrence({
+		repeat: 'monthly',
+		repeatUntil: null,
+		previous: '2026-07-07T09:00:00Z',
+		now: new Date('2026-07-07T10:00:00Z'),
+	});
+	assert.equal(next, null);
+});
+
+test('the roll-forward loop terminates instead of spinning on absurd input', () => {
+	const next = nextRepeatOccurrence({
+		repeat: 'daily',
+		repeatUntil: null,
+		previous: '1000-01-01T09:00:00Z', // absurdly far in the past
+		now: new Date('2026-07-07T10:00:00Z'),
+	});
+	// Too many missed days to roll through under the safety cap — the chain
+	// ends rather than looping forever or bursting out a huge backlog.
+	assert.equal(next, null);
+});
+
+test('an unparseable previous occurrence ends the chain instead of yielding an invalid date', () => {
+	const next = nextRepeatOccurrence({ repeat: 'daily', previous: 'not a date', now });
+	assert.equal(next, null);
+});
+
+test('a previous occurrence on a weekend still lands on a weekday', () => {
+	// Saturday. Reachable whenever a weekdays rule is set on a post that already went out at
+	// the weekend, so it must not just add a day and stop on the Sunday.
+	const next = nextRepeatOccurrence({
+		repeat: 'weekdays',
+		previous: '2026-08-08T09:00:00Z',
+		now: new Date('2026-08-08T10:00:00Z'),
+	});
+	assert.equal(next.getUTCDay(), 1); // Monday
+	assert.equal(next.toISOString(), '2026-08-10T09:00:00.000Z');
 });

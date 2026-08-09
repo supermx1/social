@@ -54,7 +54,10 @@ export const load = async ({ url }) => {
 			postUrl: p.post_url,
 			attempts: p.attempts,
 			variantGroup: p.variant_group,
-			errorMessage: p.error_message
+			errorMessage: p.error_message,
+			repeat: p.repeat,
+			repeatUntil: p.repeat_until,
+			repeatOf: p.repeat_of
 		})),
 		page: result.page,
 		totalPages: result.totalPages,
