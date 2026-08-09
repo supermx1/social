@@ -51,6 +51,12 @@ on the `Send ` prefix, not the whole string.
 previews. Any DOM probe run while it is open must be scoped to the composer subtree; a broad
 query will pull personal data into tool output. (This happened during recon and was contained.)
 
+**5. Only one WhatsApp Web tab can be live per browser.** Open a second and one of them is demoted
+to an "open in another window" screen: it renders neither the chat list nor the QR code, and every
+click on it is accepted and does nothing. It is indistinguishable from a dead session unless you
+look for it, and it is *not* an auth problem — a re-auth prompt is the wrong response. Close
+duplicate tabs before opening (`listTabs` → `closeTab`), and detect the parked screen on body text.
+
 ## Verified flow (up to, but excluding, Send)
 
 ```

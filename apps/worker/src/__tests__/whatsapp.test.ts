@@ -64,11 +64,27 @@ describe('WhatsApp Status — publishing', () => {
 			.mockResolvedValueOnce(line(composer()))
 			.mockResolvedValueOnce(
 				line({ composerClosed: true, composer: composer({ captionPresent: false, sendPresent: false }) }),
-			);
+			)
+			.mockResolvedValueOnce(line({ found: true, imagePresent: true }));
 
 		// No postUrl by design: a Status has no permalink and expires after 24h.
 		await expect(whatsappPlatform.compose(account, post)).resolves.toEqual({ confirmed: true });
-		expect(runEgo).toHaveBeenCalledTimes(3);
+		expect(runEgo).toHaveBeenCalledTimes(4);
+	});
+
+	// Verified live and the reason this check exists: after a SUCCESSFUL post the my-status list
+	// row still reads plain "My status" with no thumbnail, so the composer closing and the row
+	// looking empty are both worthless as signals. Opening the status is the only real proof.
+	it('fails when the status is not viewable afterwards, even though the composer closed', async () => {
+		runEgo
+			.mockResolvedValueOnce(line({ login: LOGGED_IN, opened: true, composer: composer({ captionText: '' }) }))
+			.mockResolvedValueOnce(line(composer()))
+			.mockResolvedValueOnce(
+				line({ composerClosed: true, composer: composer({ captionPresent: false, sendPresent: false }) }),
+			)
+			.mockResolvedValueOnce(line({ found: false, imagePresent: false }));
+
+		await expect(whatsappPlatform.compose(account, post)).rejects.toThrow(/not viewable under "My status"/);
 	});
 
 	// lib/worker.ts pattern-matches this exact string to flag the account for re-auth.
@@ -77,6 +93,17 @@ describe('WhatsApp Status — publishing', () => {
 
 		await expect(whatsappPlatform.compose(account, post)).rejects.toThrow('Session is not active.');
 		expect(runEgo).toHaveBeenCalledTimes(1); // nothing typed, nothing sent
+	});
+
+	// WhatsApp Web allows one live tab; a second is parked on a screen where clicks do nothing.
+	// That is a tab problem, not an auth problem, so it must NOT say 'Session is not active.' —
+	// the worker matches that string and would flag the account for a re-auth that fixes nothing.
+	it('names the one-tab conflict instead of blaming the session', async () => {
+		runEgo.mockResolvedValueOnce(line({ login: { loggedIn: false, qr: false, conflict: true }, opened: false }));
+
+		const err = await whatsappPlatform.compose(account, post).catch((e: Error) => e);
+		expect((err as Error).message).toMatch(/live in another window/);
+		expect((err as Error).message).not.toMatch(/Session is not active/);
 	});
 
 	it('fails when the composer never opened with the image attached', async () => {
@@ -123,7 +150,8 @@ describe('WhatsApp Status — publishing', () => {
 			.mockResolvedValueOnce(line(composer()))
 			.mockResolvedValueOnce(
 				line({ composerClosed: true, composer: composer({ captionPresent: false, sendPresent: false }) }),
-			);
+			)
+			.mockResolvedValueOnce(line({ found: true, imagePresent: true }));
 
 		await whatsappPlatform.compose(account, post);
 
@@ -136,6 +164,12 @@ describe('WhatsApp session', () => {
 
 	it('reports a live session as one identity', async () => {
 		runEgo.mockResolvedValueOnce(line(LOGGED_IN));
+		await expect(whatsappPlatform.readSession()).resolves.toEqual({ activeHandle: 'self', otherHandles: [] });
+	});
+
+	// The session behind a parked tab is alive — calling it dead would trigger a pointless re-auth.
+	it('still counts as live when the tab is parked behind another window', async () => {
+		runEgo.mockResolvedValueOnce(line({ loggedIn: false, qr: false, conflict: true }));
 		await expect(whatsappPlatform.readSession()).resolves.toEqual({ activeHandle: 'self', otherHandles: [] });
 	});
 
