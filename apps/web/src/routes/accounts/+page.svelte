@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { pb } from '$lib/pb';
+import { errorMessage } from '$lib/errors';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
 	import { textValue, numberValue, boolValue } from '$lib/forms';
 	import { statusVariant } from '$lib/status';
@@ -85,7 +86,7 @@
 			dialogOpen = false;
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -107,7 +108,7 @@
 			dialogOpen = false;
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -131,7 +132,7 @@
 			notice = jobNotices[type] ?? 'Job queued.';
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -141,7 +142,7 @@
 			await pb.collection('accounts').update(account.id, { active });
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 </script>
@@ -314,6 +315,22 @@
 						<Button type="submit">Save changes</Button>
 					</DialogFooter>
 				</form>
+			{:else if data.personas.length === 0}
+				<!--
+					An account must belong to a persona, so on a fresh install this form can only ever
+					fail validation — the persona picker has nothing in it. Say what to do instead of
+					letting someone fill in five fields and get "Cannot be blank." at the end.
+				-->
+				<DialogHeader>
+					<DialogTitle>Create a persona first</DialogTitle>
+					<DialogDescription>
+						Every account posts as a persona — its voice, audience and guardrails. There aren't any
+						yet, so there's nothing to attach an account to.
+					</DialogDescription>
+				</DialogHeader>
+				<DialogFooter>
+					<Button href="/personas">Go to Personas</Button>
+				</DialogFooter>
 			{:else}
 				<form onsubmit={create} class="grid gap-4">
 					<DialogHeader>

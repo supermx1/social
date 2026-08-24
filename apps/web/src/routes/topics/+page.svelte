@@ -2,6 +2,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page as pageStore } from '$app/state';
 	import { pb } from '$lib/pb';
+import { errorMessage } from '$lib/errors';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
 	import { textValue, numberValue, idsValue } from '$lib/forms';
 	import { statusVariant } from '$lib/status';
@@ -74,7 +75,7 @@
 			dialogOpen = false;
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -115,7 +116,7 @@
 			generateFor = null;
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -125,7 +126,7 @@
 			await pb.collection('topics').update(id, { status: 'dismissed' });
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -136,7 +137,7 @@
 			await pb.collection('topics').delete(id);
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 

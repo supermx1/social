@@ -15,8 +15,10 @@
 		loading = true;
 		const fd = new FormData(e.currentTarget as HTMLFormElement);
 		try {
+			// _superusers, not `users`: the operator is a PocketBase superuser so their token also
+			// satisfies the superuser-only `env` collection that Settings edits.
 			await pb
-				.collection('users')
+				.collection('_superusers')
 				.authWithPassword(String(fd.get('email') ?? ''), String(fd.get('password') ?? ''));
 			await goto('/');
 		} catch {

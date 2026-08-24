@@ -9,20 +9,56 @@ not platform APIs. See [social-presence-autopilot-PRD.md](social-presence-autopi
 - **`backend/`** — PocketBase (`backend/backend`). Owns the database, REST/realtime
   API, auth, the admin dashboard, serves the built frontend from `pb_public`, and
   runs the scheduler + cron timers from `pb_hooks`. Schema lives in `pb_migrations`.
-- **`apps/worker`** — thin Node runner. Polls the `jobs` collection and executes what
-  PocketBase can't run in-process: Playwright browser automation, LLM generation (any OpenAI-compatible server, e.g. LM Studio), RSS parsing, Telegram alerts.
+- **`apps/worker`** — thin runner. Polls the `jobs` collection and executes what
+  PocketBase can't run in-process: browser automation via [ego lite](https://lite.ego.app/download),
+  LLM generation (any OpenAI-compatible server), RSS parsing, Telegram alerts.
 - **`apps/web`** — SvelteKit SPA (`adapter-static`) built into `backend/pb_public`,
   talking to PocketBase via its JS SDK.
 
 Runtime config and secrets live in the superuser-only **`env` collection**, not files.
 
-## First run
+## Prerequisite: ego lite
+
+Publishing drives a real logged-in browser session through
+[**ego lite**](https://lite.ego.app/download) — a separate free macOS app that gives each
+agent an isolated Space, so several accounts can be driven without them fighting over one
+session. It cannot be bundled here (it's a signed third-party app, and it holds your
+logins), so install it once. The dashboard shows a banner with a download button whenever
+it's missing.
+
+## Build the Mac app
+
+```sh
+./scripts/package.sh          # → dist/Social.app  (~92 MB)
+```
+
+One double-clickable bundle: UI, API, database, cron and worker. The database lives in
+`~/Library/Application Support/Social`, never inside the app, so replacing the app never
+touches your accounts, posts or API keys. On first launch it generates a random password
+for the worker's own PocketBase superuser (mode `600`, never typed by you) and opens the
+first-run screen where you create your account.
+
+Prebuilt for **Apple Silicon only**. On Intel, change `--target=bun-darwin-arm64` in
+`scripts/package.sh` and drop in a `darwin_amd64` PocketBase binary.
+
+The bundle is **unsigned**, which is fine on the Mac that built it. To hand it to someone
+else without Gatekeeper quarantining it you need an Apple Developer ID:
+
+```sh
+codesign --deep --force --options runtime --sign "Developer ID Application: YOUR NAME (TEAMID)" dist/Social.app
+xcrun notarytool submit dist/Social.app --keychain-profile YOUR_PROFILE --wait
+xcrun stapler staple dist/Social.app
+```
+
+The icon is built from `assets/icon.svg` by `./scripts/make-icon.sh`, using only macOS
+built-ins (`sips` + `iconutil`) — no image dependencies to install.
+
+## First run (from source)
 
 ```sh
 npm install
 
-# 1. Create the superuser + apply schema/seed migrations
-backend/backend superuser upsert admin@example.com <password>
+# 1. Apply schema/seed migrations
 backend/backend migrate
 
 # 2. Build the frontend into backend/pb_public
@@ -36,8 +72,17 @@ cp apps/worker/.env.example apps/worker/.env   # fill PB_SUPERUSER_* + PB_URL
 npm run worker
 ```
 
-Then in the dashboard (`/_/`): create the app **user** (login for the SPA) and fill
-the **`env`** collection values (`LLM_BASE_URL`, `GEN_MODEL`, Telegram, `PROFILES_DIR`, …).
+Open <http://127.0.0.1:8095>. With no account yet you land on **/setup**, which creates
+your PocketBase **superuser** — that one account is both the app login and the dashboard
+login, so you rarely need `/_/` at all. Then fill in **Settings** (`LLM_BASE_URL`,
+`LLM_API_KEY`, `GEN_MODEL`, Telegram, …), which edits the `env` collection directly.
+
+The worker reads `env` once at startup — restart it after changing Settings.
+
+**Model / provider agnostic.** `LLM_BASE_URL` takes any OpenAI-compatible
+`/chat/completions` endpoint (Workers AI, Groq, OpenAI, OpenRouter, Together, Ollama,
+LM Studio, llama.cpp, vLLM) with `LLM_API_KEY` as its bearer token. Leave `LLM_BASE_URL`
+blank to derive the Workers AI endpoint from `CF_ACCOUNT_ID`.
 
 ## Using it
 

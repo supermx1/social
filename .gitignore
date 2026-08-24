@@ -16,6 +16,11 @@ coverage/
 
 backend/backend
 backend/pb_data/
+backend/pb_public/
+
+# Built by scripts/make-icon.sh from assets/icon.svg (macOS built-ins only, no deps).
+assets/Social.icns
+assets/Social.iconset/
 
 apps/worker/data/
 apps/*/.env

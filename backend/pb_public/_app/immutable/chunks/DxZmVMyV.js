@@ -1,1 +1,0 @@
-function e(e,t,n=``){return String(e.get(t)??n).trim()}function t(e,t,n){let r=Number(e.get(t));return Number.isFinite(r)?r:n}function n(e,t){return e.get(t)===`on`||e.get(t)===`true`}function r(t,n){return e(t,n).split(/\n|,/).map(e=>e.trim()).filter(Boolean)}function i(e,t){return e.getAll(t).map(e=>String(e)).filter(Boolean)}export{e as a,t as i,i as n,r,n as t};

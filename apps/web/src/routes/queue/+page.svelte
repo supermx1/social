@@ -2,6 +2,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page as pageStore } from '$app/state';
 	import { pb } from '$lib/pb';
+import { errorMessage } from '$lib/errors';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
@@ -148,7 +149,7 @@
 			await invalidateAll();
 			return created;
 		} catch (err) {
-			error = err instanceof Error ? err.message : 'Could not create the post.';
+			error = errorMessage(err, 'Could not create the post.');
 		}
 	}
 
@@ -170,7 +171,7 @@
 			await fn();
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 

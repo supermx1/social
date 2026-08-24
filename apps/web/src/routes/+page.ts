@@ -33,6 +33,6 @@ export const load = async () => {
 			status: j.status,
 			error: j.error
 		})),
-		state: state ? { id: state.id, paused: state.paused } : null
+		state: state ? { id: state.id, paused: state.paused, egoMissing: !!state.ego_missing } : null
 	};
 };

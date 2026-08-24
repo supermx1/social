@@ -9,8 +9,26 @@
  * and waits until the CLI can talk to it.
  */
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const EGO_LITE_BUNDLE_ID = 'com.citrolabs.ego.lite';
+export const EGO_DOWNLOAD_URL = 'https://lite.ego.app/download';
+
+// ego installs a version-managed CLI here and points ~/.local/bin/ego-browser at it. Resolve
+// that real path instead of trusting PATH: a GUI-launched .app is given launchd's minimal PATH
+// (/usr/bin:/bin:/usr/sbin:/sbin), which does NOT include ~/.local/bin, so `execFile('ego-browser')`
+// fails with ENOENT on machines where ego lite is installed and works fine from a terminal.
+const EGO_CLI_PATH = join(homedir(), '.local/share/ego/active_version_dir/Helpers/ego-browser');
+
+/** True when ego lite is installed. A bare stat — cheap enough to call on every worker tick. */
+export function egoInstalled(): boolean {
+	return existsSync(EGO_CLI_PATH);
+}
+
+// ponytail: falls back to PATH so a non-standard install still works when run from a shell.
+const egoCli = () => (egoInstalled() ? EGO_CLI_PATH : 'ego-browser');
 const READY_PROBE_SCRIPT = "cliLog('ego-browser ready')";
 const READY_PROBE_LINE = 'ego-browser ready';
 const READY_TIMEOUT_MS = 20_000;
@@ -24,7 +42,7 @@ let ready = false;
 function execEgoBrowser(script: string, timeoutMs: number): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const child = execFile(
-			'ego-browser',
+			egoCli(),
 			['nodejs'],
 			{ timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 },
 			(error, stdout, stderr) => {
@@ -66,6 +84,11 @@ export async function runEgo(script: string): Promise<string[]> {
  */
 export async function ensureBrowser(): Promise<void> {
 	if (ready) return;
+	// Checked before `open -b`, which reports a missing install the same way it reports a
+	// failed launch — the operator needs to be told to install it, not that it wouldn't start.
+	if (!egoInstalled()) {
+		throw new Error(`ego lite is not installed. Download it from ${EGO_DOWNLOAD_URL}`);
+	}
 	await new Promise<void>((resolve, reject) => {
 		execFile('open', ['-b', EGO_LITE_BUNDLE_ID], (error) => {
 			if (error) reject(new Error(`Could not launch ego lite: ${error.message}`));
