@@ -35,7 +35,7 @@
 			<p class="text-xs font-bold tracking-[0.2em] text-muted-foreground uppercase">
 				Private Tailscale console
 			</p>
-			<CardTitle class="text-2xl">Social Presence Autopilot</CardTitle>
+			<CardTitle class="text-2xl">Social OS</CardTitle>
 			<CardDescription>Sign in to review, approve, and schedule posts.</CardDescription>
 		</CardHeader>
 		<CardContent>

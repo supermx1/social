@@ -43,4 +43,4 @@ setInterval(() => {
 void syncEgoState();
 void drainJobs();
 
-console.log('Social Presence Autopilot worker started.');
+console.log('Social OS worker started.');

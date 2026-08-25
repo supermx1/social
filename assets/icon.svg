@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <!--
-    Social Presence Autopilot app icon. Colors are the app's own theme tokens
+    Social OS app icon. Colors are the app's own theme tokens
     (apps/web/src/app.css) so the icon and the UI read as one thing.
     A speech bubble drawn as an OS window: "social" + "OS", legible down to 16px
     because the silhouette carries it and the detail only has to survive 128px+.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds dist/Social.app — UI, backend, database, cron and worker in one double-clickable
+# Builds dist/Social OS.app — UI, backend, database, cron and worker in one double-clickable
 # bundle. ego lite stays a separate install (it is a signed third-party app that holds the
 # user's logged-in browser sessions); the dashboard prompts for it when it's missing.
 #
@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP="dist/Social.app"
+APP="dist/Social OS.app"
 VERSION="$(node -p "require('./package.json').version")"
 
 # Bun installs to ~/.bun/bin, which is not on a non-interactive PATH.
@@ -31,8 +31,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 echo "==> bundle"
 cp backend/backend            "$APP/Contents/Resources/backend"
 cp assets/Social.icns         "$APP/Contents/Resources/Social.icns"
-cp scripts/launcher.sh        "$APP/Contents/MacOS/Social"
-chmod +x "$APP/Contents/MacOS/Social" "$APP/Contents/Resources/backend" "$APP/Contents/Resources/worker"
+cp scripts/launcher.sh        "$APP/Contents/MacOS/Social OS"
+chmod +x "$APP/Contents/MacOS/Social OS" "$APP/Contents/Resources/backend" "$APP/Contents/Resources/worker"
 
 # pb_data is deliberately NOT copied: the user's database lives in Application Support, so
 # reinstalling or replacing the app never touches their accounts, posts or API keys.
@@ -45,10 +45,10 @@ cat > "$APP/Contents/Info.plist" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleName</key><string>Social</string>
-	<key>CFBundleDisplayName</key><string>Social</string>
-	<key>CFBundleIdentifier</key><string>app.autopilot.social</string>
-	<key>CFBundleExecutable</key><string>Social</string>
+	<key>CFBundleName</key><string>Social OS</string>
+	<key>CFBundleDisplayName</key><string>Social OS</string>
+	<key>CFBundleIdentifier</key><string>com.socialos.app</string>
+	<key>CFBundleExecutable</key><string>Social OS</string>
 	<key>CFBundleIconFile</key><string>Social</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>$VERSION</string>

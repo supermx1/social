@@ -1,6 +1,6 @@
-# Social Presence Autopilot — Product Requirements Document
+# Social OS — Product Requirements Document
 
-**Working title:** Social Presence Autopilot (placeholder — rename freely)
+**Name:** Social OS
 **Owner / sole operator:** Emeka
 **Status:** Ready for implementation
 **Audience for this doc:** An engineer or a code-generation model implementing the system phase by phase.

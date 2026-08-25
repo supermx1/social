@@ -39,7 +39,7 @@
 	// "127.0.0.1:8095", which is useless once a few tabs are open.
 	const navLabel = $derived(nav.find(([href]) => href === data.pathname)?.[1]);
 	const pageTitle = $derived(
-		!navLabel || navLabel === 'Dashboard' ? 'Social Presence Autopilot' : `${navLabel} · Autopilot`
+		!navLabel || navLabel === 'Dashboard' ? 'Social OS' : `${navLabel} · Social OS`
 	);
 </script>
 
@@ -56,9 +56,9 @@
 			>
 				<a href="/" class="flex flex-col leading-none">
 					<span class="text-[0.65rem] font-bold tracking-[0.2em] text-primary uppercase"
-						>Social Presence</span
+						>Social</span
 					>
-					<strong class="text-xl font-extrabold">Autopilot</strong>
+					<strong class="text-xl font-extrabold">OS</strong>
 				</a>
 
 				<nav

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Social.app's main executable. macOS runs this when the user opens the app, and quits the
+# "Social OS.app"'s main executable. macOS runs this when the user opens the app, and quits the
 # app when it exits — so this script starts everything, then blocks.
 #
 # Nothing here assumes a developer's machine: no PATH beyond what launchd provides, no repo
@@ -8,19 +8,25 @@
 set -eu
 
 RESOURCES="$(cd "$(dirname "$0")/../Resources" && pwd)"
-DATA="$HOME/Library/Application Support/Social"
+DATA="$HOME/Library/Application Support/Social OS"
 PORT=8095
 URL="http://127.0.0.1:$PORT"
-WORKER_SUPERUSER="worker@autopilot.local"
+WORKER_SUPERUSER="worker@socialos.local"
 
 die() {
-	osascript -e "display alert \"Social\" message \"$1\" as critical" >/dev/null 2>&1 || true
+	osascript -e "display alert \"Social OS\" message \"$1\" as critical" >/dev/null 2>&1 || true
 	exit 1
 }
 
 # This bundle ships arm64 binaries only. Say so plainly instead of dying with a
 # "Bad CPU type" the user can't act on — the source builds fine for Intel.
-[ "$(uname -m)" = "arm64" ] && : || die "This build is for Apple Silicon Macs only. On an Intel Mac, build from source: see the README."
+#
+# `uname -m` is NOT the right check here: it reports the CURRENT PROCESS's architecture,
+# which is x86_64 whenever anything upstream of this launch (e.g. the app that ran `open`)
+# is itself running under Rosetta — even on real Apple Silicon hardware, and even though the
+# arm64-only binaries below run natively just fine once actually exec'd. hw.optional.arm64
+# asks about the HARDWARE instead, so it reports correctly regardless of translation state.
+[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ] || die "This build is for Apple Silicon Macs only. On an Intel Mac, build from source: see the README."
 
 if /usr/bin/nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
 	die "Port $PORT is already in use. Social may already be running — check the Dock."

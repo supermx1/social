@@ -16,13 +16,13 @@
 // declared INSIDE the handler. See the note at the top of main.pb.js.
 
 routerAdd('GET', '/api/setup-state', (e) => {
-	const WORKER_EMAIL = 'worker@autopilot.local';
+	const WORKER_EMAIL = 'worker@socialos.local';
 	const humans = $app.findRecordsByFilter('_superusers', 'email != {:w}', '', 1, 0, { w: WORKER_EMAIL });
 	return e.json(200, { needsSetup: humans.length === 0 });
 });
 
 routerAdd('POST', '/api/bootstrap', (e) => {
-	const WORKER_EMAIL = 'worker@autopilot.local';
+	const WORKER_EMAIL = 'worker@socialos.local';
 	const MIN_PASSWORD = 10; // PocketBase's own superuser minimum
 
 	const body = new DynamicModel({ email: '', password: '' });
