@@ -13,6 +13,7 @@
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
+	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 
 	let { children, data } = $props();
@@ -25,16 +26,27 @@
 		['/feeds', 'Feeds', RssIcon],
 		['/queue', 'Queue', ListChecksIcon],
 		['/generate', 'Generate', SparklesIcon],
-		['/activity', 'Activity', ActivityIcon]
+		['/activity', 'Activity', ActivityIcon],
+		['/settings', 'Settings', SettingsIcon]
 	] as const;
 
 	function logout() {
 		pb.authStore.clear();
 		goto('/login');
 	}
+
+	// The app runs in a browser tab, so the tab is its window title — without this it reads
+	// "127.0.0.1:8095", which is useless once a few tabs are open.
+	const navLabel = $derived(nav.find(([href]) => href === data.pathname)?.[1]);
+	const pageTitle = $derived(
+		!navLabel || navLabel === 'Dashboard' ? 'Social OS' : `${navLabel} · Social OS`
+	);
 </script>
 
-<svelte:head><link rel="icon" href={favicon} /></svelte:head>
+<svelte:head>
+	<title>{pageTitle}</title>
+	<link rel="icon" href={favicon} />
+</svelte:head>
 
 <TooltipProvider>
 	{#if data.authed}
@@ -44,9 +56,9 @@
 			>
 				<a href="/" class="flex flex-col leading-none">
 					<span class="text-[0.65rem] font-bold tracking-[0.2em] text-primary uppercase"
-						>Social Presence</span
+						>Social</span
 					>
-					<strong class="text-xl font-extrabold">Autopilot</strong>
+					<strong class="text-xl font-extrabold">OS</strong>
 				</a>
 
 				<nav

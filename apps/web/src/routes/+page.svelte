@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { pb } from '$lib/pb';
+import { errorMessage } from '$lib/errors';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
@@ -31,7 +32,7 @@
 			}
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		} finally {
 			toggling = false;
 		}
@@ -54,6 +55,19 @@
 	<p class="rounded-md border-2 border-border bg-destructive px-3 py-2 text-sm font-bold text-destructive-foreground">
 		{error}
 	</p>
+{/if}
+
+{#if data.state?.egoMissing}
+	<div
+		class="flex flex-wrap items-center justify-between gap-3 rounded-md border-2 border-border bg-destructive px-3 py-2 text-destructive-foreground"
+	>
+		<p class="text-sm font-bold">
+			ego lite isn't installed — publishing, session checks and warm-ups can't run without it.
+		</p>
+		<Button href="https://lite.ego.app/download" target="_blank" rel="noreferrer" variant="secondary">
+			Download ego lite
+		</Button>
+	</div>
 {/if}
 
 <div class="grid gap-4 sm:grid-cols-3">

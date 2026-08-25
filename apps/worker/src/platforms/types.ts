@@ -1,10 +1,80 @@
-import type { Page } from 'playwright';
-import type { PostRecord } from '../types';
+import type { AccountRecord, PostRecord } from '../types';
 
-export type PlatformModule = {
+/** One page read's worth of session status for every account on a platform (design §2.4). */
+export type SessionStatusResult = {
+	/** '@handle' of whichever account is active right now, or null if nobody is logged in. */
+	activeHandle: string | null;
+	/** '@handle' for every OTHER account with a live session (e.g. scoped switcher rows). */
+	otherHandles: string[];
+};
+
+export type ComposeResult = { postUrl?: string; confirmed?: boolean };
+
+/** Reports a human-readable progress line, e.g. "switching account". Never throws — see jobs.ts. */
+export type ProgressReporter = (detail: string) => void | Promise<void>;
+
+/**
+ * ego-browser-driven platform module. No `Page` — every method drives the shared,
+ * resident browser session via `runEgo` (lib/ego.ts) and reports back what it read.
+ */
+export type EgoPlatformModule = {
 	platform: string;
 	loginUrl: string;
-	checkSession(page: Page): Promise<boolean>;
-	warm(page: Page): Promise<void>;
-	compose(page: Page, post: PostRecord): Promise<{ postUrl?: string; confirmed?: boolean }>;
+	/** ego-browser task space this platform's scripts run in; reused across jobs. */
+	taskSpace: string;
+	/**
+	 * True when the session can only ever be one identity, so "is this account live" reduces to
+	 * "is anyone logged in" — WhatsApp Web, where there is no switcher and no company/personal
+	 * choice. Without this, the shared session pre-check compares the account's label against a
+	 * handle the platform cannot report and refuses to post at all.
+	 */
+	singleIdentity?: boolean;
+	/** One page read: who's active, plus every other account with a live session. */
+	readSession(): Promise<SessionStatusResult>;
+	/**
+	 * Switches to `handle` if it isn't already active, then looks human (scroll, dwell).
+	 * Takes a handle — not just "warm whatever's active" — because warming is meant to keep
+	 * THIS account's session looking used; warming a different account by accident defeats
+	 * the point (this was a real bug: the previous warm() ignored which account was asked for).
+	 */
+	warm(handle: string): Promise<SessionStatusResult>;
+	/** Switch to `account` if needed (guarded), compose `post`, publish, confirm via the toast. */
+	compose(account: AccountRecord, post: PostRecord, onProgress?: ProgressReporter): Promise<ComposeResult>;
 };
+
+/**
+ * Accounts are meant to store the bare handle, but the UI accepts a pasted '@kasa_africa' and
+ * that is what is actually in the database. Normalising in one place keeps both forms working —
+ * without it every comparison builds '@@kasa_africa' and nothing ever matches, which presents as
+ * a dead session rather than as a bug.
+ */
+export function normalizeHandle(handle: string): string {
+	return handle.trim().replace(/^@+/, '');
+}
+
+/**
+ * True when `handle` has a live session.
+ *
+ * Both sides are normalised rather than assuming X's '@' prefix: X reports handles as
+ * '@TheAvgTechDad' while LinkedIn reports display names like 'Kasa' and
+ * 'TechGFX Technologies Limited'. Comparing case-insensitively on the bare name works for both,
+ * where building `'@' + handle` only ever worked for X.
+ *
+ * Hyphens, underscores and whitespace runs all collapse to one separator, because LinkedIn reports
+ * a personal profile as its URL slug ('chukwuemeka-anyakora') while the account row holds the
+ * display name ('Chukwuemeka Anyakora'). Without that, verify could never match a personal
+ * LinkedIn profile and pinned the account to needs_reauth permanently — even though compose()
+ * accepted the very same session, because linkedin.ts's own nameMatches() already flattened this
+ * way. Two comparisons of the same thing disagreeing is what made it look like a dead session.
+ */
+export function sessionHasHandle(session: SessionStatusResult, handle: string): boolean {
+	const flatten = (v: string) =>
+		normalizeHandle(v)
+			.toLowerCase()
+			.replace(/[-_\s]+/g, ' ')
+			.trim();
+	const wanted = flatten(handle);
+	return [session.activeHandle, ...session.otherHandles]
+		.filter((h): h is string => Boolean(h))
+		.some((h) => flatten(h) === wanted);
+}

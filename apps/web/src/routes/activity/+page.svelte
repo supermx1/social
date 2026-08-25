@@ -1,9 +1,11 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { page as pageStore } from '$app/state';
 	import { pb } from '$lib/pb';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
+	import Pager from '$lib/components/pager.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardHeader, CardTitle, CardContent } from '$lib/components/ui/card';
 	import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '$lib/components/ui/table';
@@ -12,6 +14,12 @@
 	let { data } = $props();
 
 	onMount(() => subscribeToCollectionChanges(pb, ['jobs', 'run_log'], invalidateAll));
+
+	function goToPage(param: 'jobsPage' | 'runPage', n: number) {
+		const params = new URLSearchParams(pageStore.url.searchParams);
+		params.set(param, String(n));
+		goto(`?${params}`, { keepFocus: true, noScroll: true });
+	}
 
 	function formatDate(iso: string) {
 		const d = new Date(iso);
@@ -48,12 +56,24 @@
 								<TableCell class="max-w-xs truncate text-muted-foreground">
 									{job.error || JSON.stringify(job.payload)}
 								</TableCell>
-								<TableCell><Badge variant={statusVariant(job.status)}>{job.status}</Badge></TableCell>
+								<TableCell>
+									<Badge variant={statusVariant(job.status)}>{job.status}</Badge>
+									{#if job.status === 'running' && job.detail}
+										<div class="mt-0.5 text-xs font-medium text-muted-foreground">{job.detail}</div>
+									{/if}
+								</TableCell>
 								<TableCell class="text-muted-foreground">{formatDate(job.created)}</TableCell>
 							</TableRow>
 						{/each}
 					</TableBody>
 				</Table>
+				<Pager
+					page={data.jobsPage}
+					totalPages={data.jobsTotalPages}
+					totalItems={data.jobsTotalItems}
+					onPrev={() => goToPage('jobsPage', data.jobsPage - 1)}
+					onNext={() => goToPage('jobsPage', data.jobsPage + 1)}
+				/>
 			{/if}
 		</CardContent>
 	</Card>
@@ -86,6 +106,13 @@
 						{/each}
 					</TableBody>
 				</Table>
+				<Pager
+					page={data.runPage}
+					totalPages={data.runTotalPages}
+					totalItems={data.runTotalItems}
+					onPrev={() => goToPage('runPage', data.runPage - 1)}
+					onNext={() => goToPage('runPage', data.runPage + 1)}
+				/>
 			{/if}
 		</CardContent>
 	</Card>

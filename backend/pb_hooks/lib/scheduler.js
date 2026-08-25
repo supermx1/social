@@ -86,4 +86,71 @@ function chooseSchedulerAction(input) {
 	return { type: "enqueue", postId: post.id };
 }
 
-module.exports = { chooseSchedulerAction, rollRandomWithin, withinPostingWindow, defaultTzMinutes };
+// --- repeat chains -----------------------------------------------------
+//
+// A repeating post is a CHAIN, not a cron: when a repeating post reaches a
+// terminal state, the caller creates the next occurrence as a new post and
+// clears `repeat` on the finished one, so each post spawns at most one
+// successor. `nextRepeatOccurrence` only decides WHEN that successor lands
+// (or that the chain should end) — it does no I/O.
+
+const MAX_REPEAT_ITERATIONS = 10000; // safety valve: never spin forever on a bad input
+
+function addDays(date, days) {
+	return new Date(date.getTime() + days * 86400000);
+}
+
+function isWeekend(date) {
+	const day = date.getUTCDay();
+	return day === 0 || day === 6;
+}
+
+function advanceRepeat(date, repeat) {
+	if (repeat === "weekly") return addDays(date, 7);
+	if (repeat === "weekdays") {
+		let next = addDays(date, 1);
+		while (isWeekend(next)) next = addDays(next, 1);
+		return next;
+	}
+	return addDays(date, 1); // daily
+}
+
+// Next occurrence for a repeating post, or null if the chain should end.
+// `previous` is the previous occurrence's intended time (its time-of-day is
+// preserved in the result); `now` is the current time. Rolls forward past
+// any missed occurrences (paused app, downtime, ...) so a backlog never
+// bursts out as a pile of backdated posts — the loop is capped so a bad
+// input can never spin forever. UTC-based arithmetic only: no `Intl` under
+// goja (see the timezone note at the top of this file).
+function nextRepeatOccurrence(input) {
+	const repeat = input.repeat;
+	if (repeat !== "daily" && repeat !== "weekly" && repeat !== "weekdays") return null;
+
+	// isNaN, not just null: toDate("") gives null but toDate("not a date") gives an Invalid Date,
+	// whose comparisons are all false — it would sail past the roll-forward loop and the
+	// repeatUntil check and be handed to the caller as a real occurrence to save.
+	const previous = toDate(input.previous);
+	if (!previous || isNaN(previous.getTime())) return null;
+
+	const now = toDate(input.now) || new Date();
+	const repeatUntil = toDate(input.repeatUntil);
+
+	let next = advanceRepeat(previous, repeat);
+	let iterations = 0;
+	while (next.getTime() <= now.getTime()) {
+		if (iterations++ >= MAX_REPEAT_ITERATIONS) return null;
+		next = advanceRepeat(next, repeat);
+	}
+
+	if (repeatUntil && next.getTime() > repeatUntil.getTime()) return null;
+
+	return next;
+}
+
+module.exports = {
+	chooseSchedulerAction,
+	rollRandomWithin,
+	withinPostingWindow,
+	defaultTzMinutes,
+	nextRepeatOccurrence,
+};

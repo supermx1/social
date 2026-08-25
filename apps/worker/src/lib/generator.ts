@@ -87,27 +87,89 @@ export function parseDraftArray(value: string) {
 		// from the Activity log alone (truncated-by-max_tokens vs. genuinely empty, etc.).
 		throw new Error(`${message} — raw model output (${stripped.length} chars): ${JSON.stringify(stripped.slice(0, 300))}`);
 	}
-	if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
-		throw new Error('Generator returned something other than a JSON array of strings.');
+	const drafts = coerceDraftArray(parsed);
+	if (!drafts) {
+		// The raw output goes in the message for the same reason the parse branch above does it:
+		// without it this failure is undiagnosable from the Activity log, and because the shape is
+		// intermittent you cannot reproduce it on demand to find out what the model actually said.
+		throw new Error(
+			`Generator returned something other than a JSON array of strings — raw model output (${stripped.length} chars): ${JSON.stringify(stripped.slice(0, 300))}`,
+		);
 	}
-	return parsed;
+	return drafts;
 }
 
-const llmBase = () => (config.LLM_BASE_URL || 'http://127.0.0.1:1234/v1').replace(/\/$/, '');
+/** The one string field a draft object might be hiding behind. */
+function pickText(item: unknown): string | null {
+	if (typeof item === 'string') return item;
+	if (item && typeof item === 'object') {
+		for (const key of ['text', 'post', 'content', 'body', 'draft']) {
+			const value = (item as Record<string, unknown>)[key];
+			if (typeof value === 'string') return value;
+		}
+	}
+	return null;
+}
 
-/** Set LLM_API_KEY in the env collection for hosted providers (Groq, etc.); local servers don't need it. */
-const authHeaders = (): Record<string, string> =>
-	config.LLM_API_KEY ? { authorization: `Bearer ${config.LLM_API_KEY}` } : {};
+/**
+ * Coerces the shapes a model actually returns into a plain string array, or null if it is genuinely
+ * not draft text. "Return a JSON array of strings" is a request, not a guarantee: the same prompt
+ * that answers correctly a dozen times will occasionally wrap the array in an object or make each
+ * item a `{text: ...}` record, and failing the whole job over that wastes a paid generation.
+ */
+export function coerceDraftArray(parsed: unknown): string[] | null {
+	if (Array.isArray(parsed)) {
+		const texts = parsed.map(pickText);
+		return texts.every((t): t is string => t !== null) ? texts : null;
+	}
+	if (parsed && typeof parsed === 'object') {
+		// {"posts": [...]} / {"drafts": [...]} — unwrap only when there is exactly one array to
+		// choose from, so we never silently guess between two candidate lists.
+		const arrays = Object.values(parsed).filter(Array.isArray);
+		if (arrays.length === 1) return coerceDraftArray(arrays[0]);
+	}
+	return null;
+}
 
-/** GEN_MODEL from the env collection, or whatever model LM Studio has loaded. */
+/**
+ * Where chat completions go. An explicit `LLM_BASE_URL` always wins — that is the escape hatch for
+ * LM Studio or any other OpenAI-compatible server. Otherwise it is derived from `CF_ACCOUNT_ID`,
+ * so running on Workers AI takes one configured value instead of two that have to agree (a blank
+ * `LLM_BASE_URL` used to silently fall back to LM Studio, which meant a Cloudflare model id could
+ * be sent to a local server that wasn't running). Deriving it also keeps the account id out of the
+ * migration seed, and therefore out of git.
+ */
+const llmBase = () => {
+	if (config.LLM_BASE_URL) return config.LLM_BASE_URL.replace(/\/$/, '');
+	if (config.CF_ACCOUNT_ID) {
+		return `https://api.cloudflare.com/client/v4/accounts/${config.CF_ACCOUNT_ID}/ai/v1`;
+	}
+	throw new Error(
+		'No LLM endpoint configured. Set CF_ACCOUNT_ID for Workers AI, or LLM_BASE_URL for any other OpenAI-compatible server, in the env collection.',
+	);
+};
+
+/**
+ * `LLM_API_KEY` for a third-party OpenAI-compatible provider, falling back to `CF_API_TOKEN` when
+ * we're on Workers AI. The fallback matters: `LLM_API_KEY` is not seeded by any migration, so
+ * without it a Workers AI request would go out with no Authorization header at all and 401.
+ * Local servers (LM Studio) need neither, hence the empty-headers case.
+ */
+const authHeaders = (): Record<string, string> => {
+	const key = config.LLM_API_KEY || config.CF_API_TOKEN;
+	return key ? { authorization: `Bearer ${key}` } : {};
+};
+
+/**
+ * GEN_MODEL from the env collection. Mandatory: Cloudflare Workers AI has no documented
+ * model-discovery endpoint (unlike LM Studio's `/v1/models`), so there is nothing to fall back
+ * to probing. An unset value is a configuration error, not a discovery opportunity.
+ */
 export async function resolveModel() {
-	if (config.GEN_MODEL) return config.GEN_MODEL;
-	const res = await fetch(`${llmBase()}/models`, { headers: authHeaders() });
-	if (!res.ok) throw new Error(`LLM server not reachable at ${llmBase()} (${res.status}). Is LM Studio running?`);
-	const body = (await res.json()) as { data?: { id: string }[] };
-	const id = body.data?.[0]?.id;
-	if (!id) throw new Error('LLM server has no model loaded. Load one in LM Studio or set GEN_MODEL.');
-	return id;
+	if (!config.GEN_MODEL) {
+		throw new Error('GEN_MODEL is not set. Add GEN_MODEL to the env collection (e.g. a Workers AI model id).');
+	}
+	return config.GEN_MODEL;
 }
 
 // ponytail: reasoning models (e.g. ornith-1.0-9b) spend most of this budget on hidden
@@ -159,6 +221,11 @@ export async function generateDrafts(payload: {
 	topicId?: string;
 	pillar?: string;
 }) {
+	// Checked before the lookup so a blank id fails as itself. Without this the empty string flows
+	// into the filter, matches nothing, and reports "No active x account for persona ." — an error
+	// that names no persona and sends you looking for a missing account instead of a missing field.
+	if (!payload.personaId) throw new Error('Generate job has no persona — choose one and queue it again.');
+
 	const account = await pb
 		.collection('accounts')
 		.getFirstListItem<AccountRecord>(

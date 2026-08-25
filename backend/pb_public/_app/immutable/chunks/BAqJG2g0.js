@@ -1,1 +1,0 @@
-import{G as e,V as t}from"./BntiptVu.js";function n(n){e(()=>t(()=>n()))}export{n as t};

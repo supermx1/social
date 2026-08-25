@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { pb } from '$lib/pb';
+import { errorMessage } from '$lib/errors';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
-	import { allocateProfileDir } from '$lib/profile-dir';
 	import { textValue, numberValue, boolValue } from '$lib/forms';
 	import { statusVariant } from '$lib/status';
 	import { onMount } from 'svelte';
@@ -69,25 +69,24 @@
 		const fd = new FormData(form);
 		const personaId = textValue(fd, 'personaId');
 		const platform = textValue(fd, 'platform');
-		const persona = data.personas.find((p) => p.id === personaId);
 		try {
 			await pb.collection('accounts').create({
 				persona: personaId,
 				platform,
 				handle: textValue(fd, 'handle'),
+				company_id: textValue(fd, 'companyId'),
 				timezone: textValue(fd, 'timezone', 'Europe/London'),
 				posting_window_start: textValue(fd, 'postingWindowStart', '09:00'),
 				posting_window_end: textValue(fd, 'postingWindowEnd', '17:00'),
 				max_posts_per_day: numberValue(fd, 'maxPostsPerDay', 2),
 				min_gap_minutes: numberValue(fd, 'minGapMinutes', 120),
-				profile_dir: allocateProfileDir('./data/profiles', persona?.slug ?? personaId, platform),
 				session_status: 'unknown',
 				active: true
 			});
 			dialogOpen = false;
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -98,6 +97,7 @@
 		try {
 			await pb.collection('accounts').update(textValue(fd, 'id'), {
 				handle: textValue(fd, 'handle'),
+				company_id: textValue(fd, 'companyId'),
 				timezone: textValue(fd, 'timezone'),
 				posting_window_start: textValue(fd, 'postingWindowStart'),
 				posting_window_end: textValue(fd, 'postingWindowEnd'),
@@ -108,12 +108,12 @@
 			dialogOpen = false;
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
 	const jobNotices: Record<string, string> = {
-		login_start: 'Log-in job queued — the worker will open a browser window. Log in there, then close the window; the session verifies automatically.',
+		login_start: 'Log-in job queued — ego lite will open this account’s login page and hand you the browser. Log in there, then come back and click “I’m logged in” to verify.',
 		login_confirm: 'Verifying session…',
 		warm: 'Warm-up job queued.',
 		verify: 'Verify job queued.'
@@ -132,7 +132,7 @@
 			notice = jobNotices[type] ?? 'Job queued.';
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -142,12 +142,12 @@
 			await pb.collection('accounts').update(account.id, { active });
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 </script>
 
-<PageHeader title="Accounts" description="One persistent browser profile per platform — no stored credentials.">
+<PageHeader title="Accounts" description="One account per persona and platform, posted via the shared ego-browser session — no stored credentials.">
 	{#snippet actions()}
 		<Button onclick={openCreate}>
 			<PlusIcon class="size-4" />
@@ -187,7 +187,12 @@
 						<TableRow>
 							<TableCell>
 								<div class="font-semibold">{account.personaName}</div>
-								<div class="text-xs font-medium text-muted-foreground">{account.platform} · {account.handle}</div>
+								<div class="text-xs font-medium text-muted-foreground">
+									{account.platform} · {account.handle}
+									{#if account.platform === 'linkedin'}
+										· {account.companyId ? `company ${account.companyId}` : 'personal profile'}
+									{/if}
+								</div>
 							</TableCell>
 							<TableCell><Badge variant={statusVariant(account.sessionStatus)}>{account.sessionStatus}</Badge></TableCell>
 							<TableCell>
@@ -247,7 +252,7 @@
 					<DialogHeader>
 						<DialogTitle>Edit {editing.personaName} rules</DialogTitle>
 						<DialogDescription>
-							{editing.personaName} · {editing.platform} · {editing.profileDir}
+							{editing.personaName} · {editing.platform}
 						</DialogDescription>
 					</DialogHeader>
 
@@ -261,6 +266,23 @@
 							<Input id="timezone" name="timezone" value={editing.timezone} />
 						</div>
 					</div>
+
+					{#if editing.platform === 'linkedin'}
+						<div class="grid gap-1.5">
+							<Label for="companyId">
+								LinkedIn company page ID
+								<span class="font-normal text-muted-foreground">
+									(leave empty to post as your personal profile)
+								</span>
+							</Label>
+							<Input id="companyId" name="companyId" inputmode="numeric" placeholder="107591805" value={editing.companyId} />
+							<p class="text-xs font-medium text-muted-foreground">
+								The digits in your page's admin URL — linkedin.com/company/<strong>107591805</strong>/admin/.
+								Handle must be the page's display name exactly as LinkedIn shows it, e.g. “Kasa” — that is what
+								the guard checks the composer against before posting.
+							</p>
+						</div>
+					{/if}
 
 					<div class="grid gap-4 sm:grid-cols-2">
 						<div class="grid gap-1.5">
@@ -293,12 +315,28 @@
 						<Button type="submit">Save changes</Button>
 					</DialogFooter>
 				</form>
+			{:else if data.personas.length === 0}
+				<!--
+					An account must belong to a persona, so on a fresh install this form can only ever
+					fail validation — the persona picker has nothing in it. Say what to do instead of
+					letting someone fill in five fields and get "Cannot be blank." at the end.
+				-->
+				<DialogHeader>
+					<DialogTitle>Create a persona first</DialogTitle>
+					<DialogDescription>
+						Every account posts as a persona — its voice, audience and guardrails. There aren't any
+						yet, so there's nothing to attach an account to.
+					</DialogDescription>
+				</DialogHeader>
+				<DialogFooter>
+					<Button href="/personas">Go to Personas</Button>
+				</DialogFooter>
 			{:else}
 				<form onsubmit={create} class="grid gap-4">
 					<DialogHeader>
 						<DialogTitle>New account</DialogTitle>
 						<DialogDescription>
-							Creates a dedicated browser profile for this persona and platform.
+							Adds an account to post as, for this persona and platform.
 						</DialogDescription>
 					</DialogHeader>
 
@@ -329,14 +367,31 @@
 
 					<div class="grid gap-4 sm:grid-cols-2">
 						<div class="grid gap-1.5">
-							<Label for="handle">Handle</Label>
-							<Input id="handle" name="handle" placeholder="@handle" />
+							<Label for="newHandle">Handle</Label>
+							<Input id="newHandle" name="handle" placeholder={platformValue === 'linkedin' ? 'Kasa' : '@handle'} />
 						</div>
 						<div class="grid gap-1.5">
-							<Label for="timezone">Timezone</Label>
-							<Input id="timezone" name="timezone" value="Europe/London" />
+							<Label for="newTimezone">Timezone</Label>
+							<Input id="newTimezone" name="timezone" value="Europe/London" />
 						</div>
 					</div>
+
+					{#if platformValue === 'linkedin'}
+						<div class="grid gap-1.5">
+							<Label for="newCompanyId">
+								LinkedIn company page ID
+								<span class="font-normal text-muted-foreground">
+									(leave empty to post as your personal profile)
+								</span>
+							</Label>
+							<Input id="newCompanyId" name="companyId" inputmode="numeric" placeholder="107591805" />
+							<p class="text-xs font-medium text-muted-foreground">
+								The digits in your page's admin URL — linkedin.com/company/<strong>107591805</strong>/admin/.
+								Handle must be the page's display name exactly as LinkedIn shows it, e.g. “Kasa” — that is what
+								the guard checks the composer against before posting.
+							</p>
+						</div>
+					{/if}
 
 					<div class="grid gap-4 sm:grid-cols-2">
 						<div class="grid gap-1.5">

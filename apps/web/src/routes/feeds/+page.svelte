@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { pb } from '$lib/pb';
+import { errorMessage } from '$lib/errors';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
 	import { textValue, numberValue, boolValue, idsValue } from '$lib/forms';
 	import { onMount } from 'svelte';
@@ -77,7 +78,7 @@
 			dialogOpen = false;
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -92,7 +93,7 @@
 			});
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -102,7 +103,7 @@
 			await pb.collection('feeds').update(feed.id, { active });
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -113,7 +114,7 @@
 			await pb.collection('feeds').delete(id);
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 </script>

@@ -10,6 +10,8 @@ export const load = async () => {
 			mission: p.mission,
 			audience: p.audience,
 			voiceTone: p.voice_tone,
+			imageStyle: p.image_style,
+			brandColors: p.brand_colors ?? '',
 			guardrails: p.guardrails,
 			contentPillars: p.content_pillars ?? [],
 			domainKeywords: p.domain_keywords ?? [],

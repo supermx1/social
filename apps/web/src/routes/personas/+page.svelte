@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { pb } from '$lib/pb';
+import { errorMessage } from '$lib/errors';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
 	import { textValue, listValue, boolValue } from '$lib/forms';
 	import { onMount } from 'svelte';
@@ -57,6 +58,8 @@
 			mission: textValue(fd, 'mission'),
 			audience: textValue(fd, 'audience'),
 			voice_tone: textValue(fd, 'voiceTone'),
+			image_style: textValue(fd, 'imageStyle'),
+			brand_colors: textValue(fd, 'brandColors'),
 			guardrails: textValue(fd, 'guardrails'),
 			content_pillars: listValue(fd, 'contentPillars'),
 			domain_keywords: listValue(fd, 'domainKeywords'),
@@ -79,7 +82,7 @@
 			dialogOpen = false;
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -88,7 +91,7 @@
 			await pb.collection('personas').update(persona.id, { active });
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
@@ -99,7 +102,7 @@
 			await pb.collection('personas').delete(id);
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 </script>
@@ -223,6 +226,23 @@
 				<div class="grid gap-1.5">
 					<Label for="voiceTone">Voice tone</Label>
 					<Textarea id="voiceTone" name="voiceTone" value={editing?.voiceTone ?? ''} />
+				</div>
+				<div class="grid gap-1.5">
+					<Label for="imageStyle">Image style <span class="font-normal text-muted-foreground">(drives this brand's generated imagery — leave empty for no images)</span></Label>
+					<Textarea id="imageStyle" name="imageStyle" value={editing?.imageStyle ?? ''} />
+				</div>
+
+				<div class="grid gap-1.5">
+					<Label for="brandColors">
+						Brand colours
+						<span class="font-normal text-muted-foreground">(hex values — stated to the image model as a hard constraint)</span>
+					</Label>
+					<Input id="brandColors" name="brandColors" placeholder="#7C5CFF primary, #2A1F60 dark, #FAF8F4 background" value={editing?.brandColors ?? ''} />
+					<p class="text-xs font-medium text-muted-foreground">
+						Kept separate from image style on purpose: a palette buried in prose gets diluted, and the
+						imagery comes back off-brand. Naming each colour's role (“primary”, “background”) works better
+						than a bare list.
+					</p>
 				</div>
 				<div class="grid gap-1.5">
 					<Label for="guardrails">Guardrails</Label>

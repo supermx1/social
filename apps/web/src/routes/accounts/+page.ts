@@ -1,6 +1,6 @@
 import { pb } from '$lib/pb';
 
-const platforms = ['x', 'linkedin', 'facebook_page', 'youtube_community'];
+const platforms = ['x', 'linkedin', 'whatsapp', 'facebook_page', 'youtube_community'];
 
 export const load = async () => {
 	const [personas, accounts] = await Promise.all([
@@ -15,9 +15,9 @@ export const load = async () => {
 			personaName: a.expand?.persona?.name ?? '',
 			personaSlug: a.expand?.persona?.slug ?? '',
 			platform: a.platform,
-			profileDir: a.profile_dir,
 			sessionStatus: a.session_status,
 			handle: a.handle,
+			companyId: a.company_id ?? '',
 			timezone: a.timezone,
 			postingWindowStart: a.posting_window_start,
 			postingWindowEnd: a.posting_window_end,

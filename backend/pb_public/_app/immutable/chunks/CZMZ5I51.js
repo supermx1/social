@@ -1,1 +1,0 @@
-import{o as e,s as t}from"./BntiptVu.js";import"./xihTtKlq.js";import{t as n}from"./BjtKcFiO.js";var r=new Set([`$$slots`,`$$events`,`$$legacy`]);function i(i,a){let o=e(a,r),s=[[`path`,{d:`M4 11a9 9 0 0 1 9 9`}],[`path`,{d:`M4 4a16 16 0 0 1 16 16`}],[`circle`,{cx:`5`,cy:`19`,r:`1`}]];n(i,t({name:`rss`},()=>o,{get iconNode(){return s}}))}export{i as t};

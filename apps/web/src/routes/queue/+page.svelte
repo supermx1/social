@@ -1,9 +1,12 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { page as pageStore } from '$app/state';
 	import { pb } from '$lib/pb';
+import { errorMessage } from '$lib/errors';
 	import { subscribeToCollectionChanges } from '$lib/realtime';
 	import { onMount } from 'svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
+	import Pager from '$lib/components/pager.svelte';
 	import DateTimePicker from '$lib/components/date-time-picker.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -34,6 +37,9 @@
 	import SendIcon from '@lucide/svelte/icons/send';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import TrashIcon from '@lucide/svelte/icons/trash-2';
+	import ImageIcon from '@lucide/svelte/icons/image';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 
 	let { data } = $props();
 	type PostRow = (typeof data.posts)[number];
@@ -42,21 +48,50 @@
 
 	onMount(() => subscribeToCollectionChanges(pb, ['posts', 'accounts', 'personas', 'topics'], invalidateAll));
 
-	// Filters — the full list is already loaded, so filtering is client-side.
-	let statusFilter = $state('all');
-	let personaFilter = $state('all');
-	const personaOptions = $derived(
-		[...new Map(data.posts.map((p) => [p.personaId, p.personaName])).entries()]
-			.filter(([id]) => id)
-			.map(([id, name]) => ({ id, name }))
-	);
-	const filteredPosts = $derived(
-		data.posts.filter(
-			(p) =>
-				(statusFilter === 'all' || p.status === statusFilter) &&
-				(personaFilter === 'all' || p.personaId === personaFilter)
-		)
-	);
+	// Filtering and pagination both happen server-side (queue/+page.ts) — this page can hold
+	// thousands of posts once evergreen batches and feed-driven drafts pile up, so "load
+	// everything, filter in the browser" stops being honest past a few dozen rows.
+	let statusFilter = $derived(data.statusFilter);
+	let personaFilter = $derived(data.personaFilter);
+
+	function applyFilters(next: { status?: string; persona?: string; page?: number }) {
+		const params = new URLSearchParams(pageStore.url.searchParams);
+		if (next.status !== undefined) params.set('status', next.status);
+		if (next.persona !== undefined) params.set('persona', next.persona);
+		params.set('page', String(next.page ?? 1)); // any filter change resets to page 1
+		goto(`?${params}`, { keepFocus: true, noScroll: true });
+	}
+
+	// Jobs still in flight for posts on THIS page, keyed by postId, for the live "posting…"
+	// detail next to the status badge (design doc: job status should show its current phase,
+	// not just "running", while ego-browser works through switch/type/upload/publish).
+	let liveJobDetail = $state<Record<string, string>>({});
+	async function refreshLiveJobs() {
+		const postIds = new Set(data.posts.filter((p) => p.status === 'posting').map((p) => p.id));
+		if (postIds.size === 0) {
+			liveJobDetail = {};
+			return;
+		}
+		// Bounded by definition: global browser concurrency is 1, so there is at most a
+		// handful of queued/running post_now jobs at any time — a plain getFullList is safe.
+		const jobs = await pb.collection('jobs').getFullList<{
+			payload: { postId?: string };
+			detail?: string;
+		}>({
+			filter: "type = 'post_now' && (status = 'queued' || status = 'running')"
+		});
+		const next: Record<string, string> = {};
+		for (const j of jobs) {
+			if (j.payload.postId && postIds.has(j.payload.postId)) next[j.payload.postId] = j.detail || 'working…';
+		}
+		liveJobDetail = next;
+	}
+	onMount(() => {
+		refreshLiveJobs();
+		const unsub = subscribeToCollectionChanges(pb, ['jobs'], refreshLiveJobs);
+		return unsub;
+	});
+
 	const statusOptions = ['draft', 'approved', 'scheduled', 'posting', 'posted', 'error', 'expired', 'skipped'];
 
 	// Edit & schedule dialog
@@ -67,6 +102,56 @@
 	let editScheduledFor = $state('');
 	let editRandomStart = $state('');
 	let editRandomEnd = $state('');
+	let editRepeat = $state('');
+	let editRepeatUntil = $state('');
+
+	// --- New post ---------------------------------------------------------------------------
+	// Until now every post came from Generate or Topics, so there was no way to put a specific
+	// message in the queue by hand — which is exactly what a standing ad needs, since its copy is
+	// written once and never regenerated.
+	let newOpen = $state(false);
+	let newAccount = $state('');
+	let newBody = $state('');
+	let newScheduledFor = $state('');
+	let newRepeat = $state('');
+	let newRepeatUntil = $state('');
+
+	function openNew() {
+		newAccount = data.accounts[0]?.id ?? '';
+		newBody = '';
+		newScheduledFor = '';
+		newRepeat = '';
+		newRepeatUntil = '';
+		newOpen = true;
+	}
+
+	async function createPost(e: SubmitEvent) {
+		e.preventDefault();
+		error = '';
+		try {
+			const created = await pb.collection('posts').create({
+				account: newAccount,
+				// 'evergreen', not 'topical': there is no topic behind a hand-written post, and a
+				// topical post with no topic gets expired by the scheduler on its first tick.
+				kind: 'evergreen',
+				body: newBody,
+				media: [],
+				// 'approved' skips the review step the generator's drafts need — this copy was
+				// written by hand in this dialog, so there is nothing left to review.
+				status: 'approved',
+				timing_mode: 'exact',
+				scheduled_for: newScheduledFor || null,
+				repeat: newRepeat,
+				repeat_until: newRepeat ? newRepeatUntil || null : null,
+				attempts: 0
+			});
+			newOpen = false;
+			await invalidateAll();
+			return created;
+		} catch (err) {
+			error = errorMessage(err, 'Could not create the post.');
+		}
+	}
 
 	function openEdit(post: PostRow) {
 		editing = post;
@@ -75,6 +160,8 @@
 		editScheduledFor = post.scheduledFor ?? '';
 		editRandomStart = post.randomWindowStart ?? '';
 		editRandomEnd = post.randomWindowEnd ?? '';
+		editRepeat = post.repeat ?? '';
+		editRepeatUntil = post.repeatUntil ?? '';
 		dialogOpen = true;
 	}
 
@@ -84,14 +171,19 @@
 			await fn();
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
+			error = errorMessage(err);
 		}
 	}
 
 	async function saveEdit(e: SubmitEvent) {
 		e.preventDefault();
 		if (!editing) return;
-		const payload: Record<string, unknown> = { body: editBody, timing_mode: editTimingMode };
+		const payload: Record<string, unknown> = {
+			body: editBody,
+			timing_mode: editTimingMode,
+			repeat: editRepeat,
+			repeat_until: editRepeat ? editRepeatUntil || null : null
+		};
 		if (editTimingMode === 'exact') {
 			payload.scheduled_for = editScheduledFor || null;
 		} else {
@@ -114,6 +206,13 @@
 			pb.collection('jobs').create({ type: 'post_now', payload: { postId: id }, status: 'queued', attempts: 0 })
 		);
 
+	const regenerateImage = (id: string) =>
+		run(() =>
+			pb
+				.collection('jobs')
+				.create({ type: 'generate_image', payload: { postId: id }, status: 'queued', attempts: 0 })
+		);
+
 	function formatDate(iso: string | null | undefined) {
 		if (!iso) return null;
 		const d = new Date(iso);
@@ -130,13 +229,24 @@
 		}
 		return formatDate(post.scheduledFor) ?? 'Not scheduled';
 	}
+
+	const repeatLabels: Record<string, string> = { daily: 'Daily', weekdays: 'Weekdays', weekly: 'Weekly' };
+
+	function repeatUntilLabel(post: PostRow) {
+		return post.repeatUntil ? `Repeats until ${formatDate(post.repeatUntil)}` : 'Repeats indefinitely';
+	}
 </script>
 
 <PageHeader title="Queue" description="Edit, approve, schedule, or force-publish content.">
 	{#snippet actions()}
+		<Button onclick={openNew} disabled={data.accounts.length === 0}>
+			<PlusIcon class="size-4" />
+			New post
+		</Button>
 		<Select
 			type="single"
-			bind:value={statusFilter}
+			value={statusFilter}
+			onValueChange={(v) => applyFilters({ status: v })}
 			items={[{ value: 'all', label: 'All statuses' }, ...statusOptions.map((s) => ({ value: s, label: s }))]}
 		>
 			<SelectTrigger class="w-40"><SelectValue placeholder="Status" /></SelectTrigger>
@@ -149,16 +259,17 @@
 		</Select>
 		<Select
 			type="single"
-			bind:value={personaFilter}
+			value={personaFilter}
+			onValueChange={(v) => applyFilters({ persona: v })}
 			items={[
 				{ value: 'all', label: 'All personas' },
-				...personaOptions.map((p) => ({ value: p.id, label: p.name }))
+				...data.personas.map((p) => ({ value: p.id, label: p.name }))
 			]}
 		>
 			<SelectTrigger class="w-44"><SelectValue placeholder="Persona" /></SelectTrigger>
 			<SelectContent>
 				<SelectItem value="all" label="All personas">All personas</SelectItem>
-				{#each personaOptions as p (p.id)}
+				{#each data.personas as p (p.id)}
 					<SelectItem value={p.id} label={p.name}>{p.name}</SelectItem>
 				{/each}
 			</SelectContent>
@@ -174,7 +285,7 @@
 
 <Card>
 	<CardContent class="p-0">
-		{#if filteredPosts.length === 0}
+		{#if data.posts.length === 0}
 			<p class="p-5 text-sm font-medium text-muted-foreground">
 				No posts match these filters. Use Generate or Topics to create drafts.
 			</p>
@@ -190,7 +301,7 @@
 					</TableRow>
 				</TableHeader>
 				<TableBody>
-					{#each filteredPosts as post (post.id)}
+					{#each data.posts as post (post.id)}
 						<TableRow>
 							<TableCell>
 								<div class="font-semibold">{post.personaName}</div>
@@ -199,7 +310,17 @@
 								</div>
 							</TableCell>
 							<TableCell><Badge variant="outline">{post.kind}</Badge></TableCell>
-							<TableCell class="text-muted-foreground">{timingLabel(post)}</TableCell>
+							<TableCell class="text-muted-foreground">
+								{timingLabel(post)}
+								{#if post.repeat}
+									<Tooltip>
+										<TooltipTrigger class="ml-1.5 cursor-default border-0 bg-transparent p-0 align-middle">
+											<Badge variant="muted">{repeatLabels[post.repeat] ?? post.repeat}</Badge>
+										</TooltipTrigger>
+										<TooltipContent>{repeatUntilLabel(post)}</TooltipContent>
+									</Tooltip>
+								{/if}
+							</TableCell>
 							<TableCell>
 								{#if post.status === 'error' && post.errorMessage}
 									<Tooltip>
@@ -210,6 +331,9 @@
 									</Tooltip>
 								{:else}
 									<Badge variant={statusVariant(post.status)}>{post.status}</Badge>
+								{/if}
+								{#if post.status === 'posting' && liveJobDetail[post.id]}
+									<div class="mt-0.5 text-xs font-medium text-muted-foreground">{liveJobDetail[post.id]}</div>
 								{/if}
 							</TableCell>
 							<TableCell>
@@ -238,6 +362,10 @@
 												Post now
 											</DropdownMenuItem>
 										{/if}
+										<DropdownMenuItem onclick={() => regenerateImage(post.id)}>
+											<RefreshCwIcon class="size-4" />
+											Regenerate image
+										</DropdownMenuItem>
 										<DropdownMenuSeparator />
 										<DropdownMenuItem variant="destructive" onclick={() => remove(post.id)}>
 											<TrashIcon class="size-4" />
@@ -250,6 +378,13 @@
 					{/each}
 				</TableBody>
 			</Table>
+			<Pager
+				page={data.page}
+				totalPages={data.totalPages}
+				totalItems={data.totalItems}
+				onPrev={() => applyFilters({ page: data.page - 1 })}
+				onNext={() => applyFilters({ page: data.page + 1 })}
+			/>
 		{/if}
 	</CardContent>
 </Card>
@@ -269,6 +404,26 @@
 				<div class="grid gap-1.5">
 					<Label for="body">Body</Label>
 					<Textarea id="body" bind:value={editBody} rows={6} />
+				</div>
+
+				<div class="grid gap-1.5">
+					<Label>Image</Label>
+					{#if editing?.media?.length}
+						<ul class="grid gap-1 text-xs font-medium text-muted-foreground">
+							{#each editing.media as path (path)}
+								<li class="flex items-center gap-1.5 truncate">
+									<ImageIcon class="size-3.5 shrink-0" />
+									{path}
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="text-xs font-medium text-muted-foreground">No image for this post.</p>
+					{/if}
+					<Button type="button" variant="outline" size="sm" onclick={() => editing && regenerateImage(editing.id)}>
+						<RefreshCwIcon class="size-4" />
+						Regenerate image
+					</Button>
 				</div>
 
 				<div class="grid gap-1.5">
@@ -307,6 +462,35 @@
 					</div>
 				{/if}
 
+				<div class="grid gap-1.5">
+					<Label for="repeat">Repeats</Label>
+					<Select
+						type="single"
+						bind:value={editRepeat}
+						items={[
+							{ value: '', label: 'One-off' },
+							{ value: 'daily', label: 'Daily' },
+							{ value: 'weekdays', label: 'Weekdays' },
+							{ value: 'weekly', label: 'Weekly' }
+						]}
+					>
+						<SelectTrigger id="repeat"><SelectValue placeholder="One-off" /></SelectTrigger>
+						<SelectContent>
+							<SelectItem value="" label="One-off">One-off</SelectItem>
+							<SelectItem value="daily" label="Daily">Daily</SelectItem>
+							<SelectItem value="weekdays" label="Weekdays">Weekdays</SelectItem>
+							<SelectItem value="weekly" label="Weekly">Weekly</SelectItem>
+						</SelectContent>
+					</Select>
+				</div>
+
+				{#if editRepeat}
+					<div class="grid gap-1.5">
+						<Label>Until</Label>
+						<DateTimePicker bind:value={editRepeatUntil} placeholder="Repeats forever" />
+					</div>
+				{/if}
+
 				{#if editing?.variantGroup}
 					<p class="text-xs font-medium text-muted-foreground">
 						Part of a batch of variants generated together ({editing.variantGroup}).
@@ -318,5 +502,84 @@
 				</DialogFooter>
 			</form>
 		{/key}
+	</DialogContent>
+</Dialog>
+
+<Dialog bind:open={newOpen}>
+	<DialogContent class="max-w-2xl">
+		<form onsubmit={createPost} class="grid gap-4">
+			<DialogHeader>
+				<DialogTitle>New post</DialogTitle>
+				<DialogDescription>
+					Write a message by hand instead of generating one. Set it to repeat for a standing ad.
+				</DialogDescription>
+			</DialogHeader>
+
+			<div class="grid gap-1.5">
+				<Label for="newAccount">Account</Label>
+				<Select
+					type="single"
+					bind:value={newAccount}
+					items={data.accounts.map((a) => ({ value: a.id, label: `${a.personaName} · ${a.platform} · ${a.handle}` }))}
+				>
+					<SelectTrigger id="newAccount"><SelectValue placeholder="Choose an account" /></SelectTrigger>
+					<SelectContent>
+						{#each data.accounts as a (a.id)}
+							<SelectItem value={a.id} label="{a.personaName} · {a.platform} · {a.handle}">
+								{a.personaName} · {a.platform} · {a.handle}
+							</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
+			</div>
+
+			<div class="grid gap-1.5">
+				<Label for="newBody">Message</Label>
+				<Textarea id="newBody" bind:value={newBody} rows={6} required />
+			</div>
+
+			<div class="grid gap-1.5">
+				<Label>Scheduled for</Label>
+				<DateTimePicker bind:value={newScheduledFor} placeholder="Next posting window" />
+			</div>
+
+			<div class="grid gap-1.5">
+				<Label for="newRepeat">Repeats</Label>
+				<Select
+					type="single"
+					bind:value={newRepeat}
+					items={[
+						{ value: '', label: 'One-off' },
+						{ value: 'daily', label: 'Daily' },
+						{ value: 'weekdays', label: 'Weekdays' },
+						{ value: 'weekly', label: 'Weekly' }
+					]}
+				>
+					<SelectTrigger id="newRepeat"><SelectValue placeholder="One-off" /></SelectTrigger>
+					<SelectContent>
+						<SelectItem value="" label="One-off">One-off</SelectItem>
+						<SelectItem value="daily" label="Daily">Daily</SelectItem>
+						<SelectItem value="weekdays" label="Weekdays">Weekdays</SelectItem>
+						<SelectItem value="weekly" label="Weekly">Weekly</SelectItem>
+					</SelectContent>
+				</Select>
+			</div>
+
+			{#if newRepeat}
+				<div class="grid gap-1.5">
+					<Label>Until</Label>
+					<DateTimePicker bind:value={newRepeatUntil} placeholder="Repeats forever" />
+				</div>
+			{/if}
+
+			<p class="text-xs font-medium text-muted-foreground">
+				No image yet — add one with “Generate image” from the row menu once the post exists. WhatsApp
+				Status will not publish without one.
+			</p>
+
+			<DialogFooter>
+				<Button type="submit">Create</Button>
+			</DialogFooter>
+		</form>
 	</DialogContent>
 </Dialog>

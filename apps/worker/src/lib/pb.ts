@@ -7,7 +7,7 @@ try {
 	// no .env — rely on the process environment
 }
 
-export const pb = new PocketBase(process.env.PB_URL ?? 'http://127.0.0.1:8090');
+export const pb = new PocketBase(process.env.PB_URL ?? 'http://127.0.0.1:8095');
 pb.autoCancellation(false);
 
 export async function authSuperuser() {
@@ -17,7 +17,7 @@ export async function authSuperuser() {
 	await pb.collection('_superusers').authWithPassword(email, password);
 }
 
-/** Runtime config from the superuser-only `env` collection (ANTHROPIC_API_KEY, GEN_MODEL, HEADLESS, ...). */
+/** Runtime config from the superuser-only `env` collection (CF_API_TOKEN, GEN_MODEL, MEDIA_DIR, ...). */
 export const config: Record<string, string> = {};
 
 /** Loaded once at startup (PRD §6.9). Restart the worker after editing `env` in the dashboard. */

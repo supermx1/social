@@ -9,7 +9,8 @@ export type Platform =
 	| 'facebook_page'
 	| 'youtube_community'
 	| 'instagram'
-	| 'threads';
+	| 'threads'
+	| 'whatsapp';
 
 export type SessionStatus = 'active' | 'needs_reauth' | 'unknown' | 'disabled';
 
@@ -28,11 +29,13 @@ export type PostStatus =
 	| 'expired'
 	| 'skipped';
 export type TimingMode = 'exact' | 'random';
+export type RepeatRule = '' | 'daily' | 'weekly' | 'weekdays';
 
 export type JobType =
 	| 'login_start'
 	| 'login_confirm'
 	| 'generate'
+	| 'generate_image'
 	| 'post_now'
 	| 'warm'
 	| 'verify'
@@ -47,7 +50,7 @@ export type Link = { label: string; url: string };
 /** Type-specific args for a queued worker job (PRD §5.3 / §6.8). */
 export type JobPayload =
 	| { accountId: string } // login_start | login_confirm | warm | verify
-	| { postId: string } // post_now
+	| { postId: string } // post_now | generate_image — dispatch is on job.type, not payload shape
 	| { feedId: string } // feed_poll
 	| {
 			// generate
@@ -56,6 +59,7 @@ export type JobPayload =
 			n: number;
 			topicId?: string; // set for topical (Mode B); omit for evergreen (Mode A)
 			pillar?: string; // set for evergreen
+			withImages?: boolean; // generate one image per draft alongside the text (design doc §4.2)
 	  };
 
 type Base = { id: string; created: string; updated: string };
@@ -64,7 +68,11 @@ export type AccountRecord = Base & {
 	persona: string;
 	platform: Platform;
 	handle: string;
-	profile_dir: string;
+	/**
+	 * LinkedIn only: which identity to post as. A numeric company page id posts as that page;
+	 * empty posts as the personal profile. Ignored by every other platform.
+	 */
+	company_id: string;
 	session_status: SessionStatus;
 	last_verified_at: string;
 	last_warmed_at: string;
@@ -82,12 +90,15 @@ export type PersonaRecord = Base & {
 	mission: string;
 	audience: string;
 	voice_tone: string;
+	image_style: string;
 	guardrails: string;
 	content_pillars: string[];
 	domain_keywords: string[];
 	example_posts: string[];
 	links: Link[];
 	default_hashtags: string[];
+	/** Brand palette as hex values, fed to image generation verbatim. Empty = unconstrained. */
+	brand_colors: string;
 	active: boolean;
 };
 
@@ -123,6 +134,10 @@ export type PostRecord = Base & {
 	attempts: number;
 	error_message: string;
 	variant_group: string;
+	/** Empty string = one-off post (not recurring). Otherwise: the schedule rule. */
+	repeat: RepeatRule;
+	repeat_until: string;
+	repeat_of: string;
 };
 
 export type JobRecord = Base & {
@@ -131,4 +146,6 @@ export type JobRecord = Base & {
 	status: JobStatus;
 	error: string;
 	attempts: number;
+	/** Live progress line the worker updates mid-run, e.g. "switching account". */
+	detail: string;
 };
