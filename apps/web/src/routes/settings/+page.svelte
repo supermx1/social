@@ -50,7 +50,6 @@
 			description: 'How aggressively feed items become topics, and topics become drafts.',
 			keys: [
 				'RELEVANCE_GATE',
-				'RELEVANCE_MODEL',
 				'RELEVANCE_MIN',
 				'RELEVANCE_AUTODRAFT',
 				'FEED_DEFAULT_POLL_MINUTES',
@@ -65,18 +64,53 @@
 	// genuinely free text (paths, model ids, provider URLs), so this only covers the keys that
 	// have a real fixed shape: true/false, a number, or a closed set of values. Forcing someone
 	// to type "true" correctly into a text box is a UX bug, not a feature.
+	//
+	// 'datalist' is a *suggestion*, not a closed set (plain <select> would be wrong for
+	// LLM_BASE_URL/GEN_MODEL — any OpenAI-compatible value is valid, including ones not listed
+	// here) — the point is to give someone who doesn't know this space a start, not to fence
+	// them in. The model ids are a static, hand-picked list, not a live price feed: they're
+	// solid known-good picks at the time of writing, favoring cheap-and-fast over frontier
+	// quality since that's the right default for a high-volume social-posting worker. Update
+	// the array below if a provider's lineup moves on.
 	type FieldKind =
 		| { kind: 'boolean' }
 		| { kind: 'number'; min?: number; max?: number }
 		| { kind: 'select'; options: string[] }
-		| { kind: 'timezone' };
+		| { kind: 'datalist'; options: string[]; placeholder?: string };
+
+	// Native <input list> + <datalist>, not a searchable combobox component — Intl already knows
+	// every IANA zone name, so there's nothing to build here beyond asking it.
+	const timezones = Intl.supportedValuesOf('timeZone');
+
+	const RECOMMENDED_BASE_URLS = [
+		'https://api.groq.com/openai/v1', // Groq — cheapest fast-inference tier, great default
+		'https://openrouter.ai/api/v1', // OpenRouter — one key, many providers, several free tiers
+		'https://api.openai.com/v1',
+		'http://localhost:11434/v1', // Ollama — local, free, needs a capable Mac
+		'http://127.0.0.1:1234/v1' // LM Studio — local, free
+	];
+
+	const RECOMMENDED_MODELS = [
+		'@cf/zai-org/glm-4.7-flash', // Workers AI — this app's own seeded default: cheap, fast, good enough
+		'@cf/meta/llama-3.3-70b-instruct-fp8-fast', // Workers AI — heavier, still cheap
+		'llama-3.3-70b-versatile', // Groq
+		'llama-3.1-8b-instant', // Groq — fastest/cheapest, fine for short social copy
+		'gpt-4o-mini', // OpenAI — cheap tier
+		'meta-llama/llama-3.3-70b-instruct' // OpenRouter
+	];
 
 	const FIELD_KIND: Record<string, FieldKind> = {
 		HEADLESS: { kind: 'boolean' },
 		STEALTH: { kind: 'boolean' },
 		RELEVANCE_GATE: { kind: 'boolean' },
 		IMAGE_QUALITY: { kind: 'select', options: ['low', 'medium', 'high', 'auto'] },
-		DEFAULT_TIMEZONE: { kind: 'timezone' },
+		DEFAULT_TIMEZONE: { kind: 'datalist', options: timezones, placeholder: 'Europe/London' },
+		LLM_BASE_URL: {
+			kind: 'datalist',
+			options: RECOMMENDED_BASE_URLS,
+			placeholder: 'blank = derive Workers AI from CF_ACCOUNT_ID'
+		},
+		GEN_MODEL: { kind: 'datalist', options: RECOMMENDED_MODELS },
 		DEFAULT_MAX_POSTS_PER_DAY: { kind: 'number', min: 0 },
 		DEFAULT_MIN_GAP_MINUTES: { kind: 'number', min: 0 },
 		RELEVANCE_MIN: { kind: 'number', min: 0, max: 100 },
@@ -90,10 +124,6 @@
 	// ponytail: masks by name rather than by a per-key schema — every secret this app holds is
 	// already a *_TOKEN or *_API_KEY, and a new one that isn't will simply render in the clear.
 	const isSecret = (key: string) => /_TOKEN$|_API_KEY$/.test(key);
-
-	// Native <input list> + <datalist>, not a searchable combobox component — Intl already knows
-	// every IANA zone name, so there's nothing to build here beyond asking it.
-	const timezones = Intl.supportedValuesOf('timeZone');
 
 	// Editable copy of the loaded rows. Resynced whenever `data` changes, which on this page
 	// only happens via the invalidateAll() after a save — so a save settles the form back onto
@@ -152,8 +182,13 @@
 					{/each}
 				</SelectContent>
 			</Select>
-		{:else if kind?.kind === 'timezone'}
-			<Input id={key} list="settings-timezones" bind:value={values[key]} placeholder="Europe/London" />
+		{:else if kind?.kind === 'datalist'}
+			<Input id={key} list="{key}-options" bind:value={values[key]} placeholder={kind.placeholder} />
+			<datalist id="{key}-options">
+				{#each kind.options as option (option)}
+					<option value={option}></option>
+				{/each}
+			</datalist>
 		{:else if kind?.kind === 'number'}
 			<Input id={key} type="number" min={kind.min} max={kind.max} bind:value={values[key]} />
 		{:else}
@@ -161,12 +196,6 @@
 		{/if}
 	</div>
 {/snippet}
-
-<datalist id="settings-timezones">
-	{#each timezones as tz (tz)}
-		<option value={tz}></option>
-	{/each}
-</datalist>
 
 <PageHeader title="Settings" description="Runtime configuration for the worker">
 	{#snippet actions()}
